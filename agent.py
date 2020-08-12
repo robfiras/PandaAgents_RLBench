@@ -1,6 +1,6 @@
 import numpy as np
-from ...tools.RLBench.rlbench.backend.observation import Observation
-from ...tools.RLBench.rlbench.action_modes import ActionMode
+from rlbench.backend.observation import Observation
+from rlbench.action_modes import ActionMode
 
 
 class Agent(object):

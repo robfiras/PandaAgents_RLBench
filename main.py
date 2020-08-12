@@ -1,7 +1,7 @@
 from rlbench.environment import Environment
-from RLBench.rlbench.action_modes import ArmActionMode, ActionMode
-from RLBench.rlbench.observation_config import ObservationConfig
-from RLBench.rlbench.tasks.reach_target import ReachTarget
+from rlbench.action_modes import ArmActionMode, ActionMode
+from rlbench.observation_config import ObservationConfig
+from rlbench.tasks.reach_target import ReachTarget
 from agent import Agent
 import numpy as np
 import time
