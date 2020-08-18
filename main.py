@@ -2,7 +2,7 @@ from rlbench.environment import Environment
 from rlbench.action_modes import ArmActionMode, ActionMode
 from rlbench.observation_config import ObservationConfig
 from rlbench.tasks.reach_target import ReachTarget
-from agent import Agent
+from agents.ddpg import DDPG
 import numpy as np
 import time
 
@@ -12,7 +12,9 @@ live_demos = True
 DATASET = '' if live_demos else 'PATH/TO/YOUR/DATASET'
 
 obs_config = ObservationConfig()
-obs_config.set_all(True)
+
+# Use only low-dim observations
+obs_config.set_all_low_dim(True)
 
 action_mode = ActionMode(ArmActionMode.ABS_JOINT_VELOCITY)
 env = Environment(
@@ -20,12 +22,10 @@ env = Environment(
 env.launch()
 
 task = env.get_task(ReachTarget)
-#demos = task.get_demos(2, live_demos=live_demos)
+# demos = task.get_demos(2, live_demos=live_demos)
 
-agent = Agent(env.action_size)
-#agent.ingest(demos)
-
-print("This is the action space size: ", env.action_size )
+agent = DDPG(env.action_size)
+# agent.ingest(demos)
 
 
 training_steps = 120
