@@ -15,6 +15,7 @@ class Agent(ABC):
     #     return np.concatenate([arm, gripper], axis=-1)
 
     @abstractmethod
-    def act(self, action_mode: ActionMode, ):
+    def act(self, action_mode: ActionMode):
         pass
+
 

@@ -10,7 +10,7 @@ import tensorflow as tf
 
 
 class OUNoise:
-    """ Creates temporally correlated noise """
+    """ Creates temporally correlated Ornstein-Uhlenbeck noise"""
     def __init__(self,  n_actions, mu=0.0, theta=0.15, sigma=0.2):
         self.n_actions = n_actions
         self.mu = tf.constant(mu)
