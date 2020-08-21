@@ -1,48 +1,29 @@
-from rlbench.environment import Environment
 from rlbench.action_modes import ArmActionMode, ActionMode
 from rlbench.observation_config import ObservationConfig
 from rlbench.tasks.reach_target import ReachTarget
+from rlbench.environment import Environment
 from agents.ddpg import DDPG
-import numpy as np
-import time
 
-
-# To use 'saved' demos, set the path below, and set live_demos=False
-live_demos = True
-DATASET = '' if live_demos else 'PATH/TO/YOUR/DATASET'
-
+# set the observation configuration
 obs_config = ObservationConfig()
 
-# Use only low-dim observations
-obs_config.set_all_low_dim(True)
+# use only low-dim observations
+obs_only_low_dim = True     # currently only low-dim supported
+obs_config.set_all_high_dim(not obs_only_low_dim)
+obs_config.set_all_low_dim(obs_only_low_dim)
 
+# define action mode and environment
 action_mode = ActionMode(ArmActionMode.ABS_JOINT_VELOCITY)
-env = Environment(
-    action_mode, DATASET, obs_config, False)
-env.launch()
+env = Environment(action_mode=action_mode, obs_config=obs_config, headless=False)
 
-task = env.get_task(ReachTarget)
-# demos = task.get_demos(2, live_demos=live_demos)
+# create an agent
+agent = DDPG(env, ReachTarget, obs_config)
 
-agent = DDPG(env.action_size)
-# agent.ingest(demos)
+# define number of training steps
+training_episodes = 100
 
-
-training_steps = 120
-episode_length = 40
-obs = None
-for i in range(training_steps):
-    if i % episode_length == 0:
-        print('Reset Episode')
-        descriptions, obs = task.reset()
-        print(descriptions)
-    action = agent.act(obs)
-    print(action)
-    obs, reward, terminate = task.step(action)
-    print("These are the joint-velocities obs: ", obs.joint_velocities)
-    print("These are the low-dim obs", obs.task_low_dim_state)
-    time.sleep(10)
+# run agent
+agent.run(training_episodes)
 
 
-print('Done')
-env.shutdown()
+

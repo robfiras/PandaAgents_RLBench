@@ -1,8 +1,7 @@
 from agents.base import Agent
 import numpy as np
 from rlbench.backend.observation import Observation
-from rlbench.action_modes import ActionMode
-from abc import ABC, abstractmethod
+from rlbench.observation_config import ObservationConfig
 import tensorflow as tf
 from agents.ddpg_backend.replay_buffer import ReplayBuffer
 from agents.ddpg_backend.target_update_ops import update_target_variables
@@ -25,7 +24,7 @@ class ActorNetwork(tf.keras.Model):
         # define the layers that are going to be used in our actor
         self.hidden_layers = [tf.keras.layers.Dense(dim, activation=activation)
                               for dim, activation in zip(units_hidden_layers, activations)]
-        self.out = tf.keras.layers.Dense(dim_actions)
+        self.out = tf.keras.layers.Dense(dim_actions, activation="tanh")
 
         # setup the noise for the actor
         self.sigma = sigma
@@ -98,12 +97,16 @@ class CriticNetwork(tf.keras.Model):
 
 
 class DDPG(Agent):
-    def __init__(self, dim_observations,
-                 dim_actions,
+    def __init__(self, env,
+                 task_class,
+                 obs_config,
                  gamma=0.9,
                  tau=0.001,
                  sigma=0.1,
-                 batch_size = 32,
+                 batch_size=32,
+                 episode_length=40,
+                 training_interval=1,
+                 start_training=0,
                  use_ou_noise=False,
                  buffer_size=50000,
                  lr_actor=0.0001,
@@ -112,12 +115,14 @@ class DDPG(Agent):
                  layers_critic=[400, 300]
                  ):
         """
-        :param dim_observations: dimension of the observation vector
-        :param dim_actions: dimension of action vector
+        :param obs_config: configuration of the observation
         :param gamma: discount factor
         :param tau: hyperparameter soft target updates
         :param sigma: standard deviation for noise
         :param batch_size: batch size to be sampled from the buffer
+        :param episode_length: length of an episode
+        :param training_interval: intervals used for training (default==1 -> train ech step)
+        :param start_training: step at which training is started
         :param use_ou_noise: if true, Ornstein-Uhlenbeck noise is used instead of Gaussian noise
         :param buffer_size: size of the replay buffer
         :param lr_actor: learning rate actor
@@ -126,24 +131,31 @@ class DDPG(Agent):
         :param layers_critic: number of units in each dense layer in the actor (len of list defines number of layers)
         """
 
+        # call parent constructor
+        super(DDPG, self).__init__(env, task_class, obs_config)
+
         # define the dimensions
-        self.dim_actions = dim_actions
-        self.dim_inputs_actor = dim_observations
-        self.dim_inputs_critic = dim_observations + dim_actions
+        self.dim_inputs_actor = self.dim_observations
+        self.dim_inputs_critic = self.dim_observations + self.dim_actions
 
         # setup the some hyperparameters
         self.gamma = gamma
         self.tau = tau
         self.sigma = sigma
         self.batch_size = batch_size
+        self.episode_length = episode_length
+        self.training_interval = training_interval
+        self.start_training = start_training
+        self.global_step = 0
+        self.global_episode = 0
         self.use_ou_noise = use_ou_noise
 
         # setup the replay buffer
         self.replay_buffer = ReplayBuffer(buffer_size)
 
         # --- define actor and its target---
-        self.actor = ActorNetwork(layers_actor, dim_actions, sigma=sigma, use_ou_noise=use_ou_noise)
-        self.target_actor = ActorNetwork(layers_actor, dim_actions)
+        self.actor = ActorNetwork(layers_actor, self.dim_actions, sigma=sigma, use_ou_noise=use_ou_noise)
+        self.target_actor = ActorNetwork(layers_actor,  self.dim_actions)
         # instantiate the models (if we do not instantiate the model, we can not copy their weights)
         self.actor.build((1, self.dim_inputs_actor))
         self.target_actor.build((1, self.dim_inputs_actor))
@@ -153,8 +165,8 @@ class DDPG(Agent):
         self.optimizer_actor = tf.keras.optimizers.Adam(learning_rate=lr_actor)
 
         # --- define the critic and its target ---
-        self.critic = CriticNetwork(layers_critic, dim_obs=dim_observations, dim_outputs=1)   # one Q-value per state needed
-        self.target_critic = CriticNetwork(layers_critic, dim_obs=dim_observations, dim_outputs=1)    # one Q-value per state needed
+        self.critic = CriticNetwork(layers_critic, dim_obs=self.dim_observations, dim_outputs=1)   # one Q-value per state needed
+        self.target_critic = CriticNetwork(layers_critic, dim_obs=self.dim_observations, dim_outputs=1)    # one Q-value per state needed
         # instantiate the models (if we do not instantiate the model, we can not copy their weights)
         self.critic.build((1, self.dim_inputs_critic))
         self.target_critic.build((1, self.dim_inputs_critic))
@@ -163,24 +175,72 @@ class DDPG(Agent):
         # setup the critic's optimizer
         self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=lr_critic)
 
-    def act(self, obs: Observation):
-        pass
-        # print("these are the joint forces: ", obs.joint_forces)
-        # print("these are the joint velocities: ", obs.joint_velocities)
-        # print("these are the joint positions: ", obs.joint_positions)
-        # print("this is the gripper pose: ", obs.gripper_pose)
-        # print("this is the gripper_joint_pos: ", obs.gripper_joint_positions)
-        # print("this is the gripper touch forces ", obs.gripper_touch_forces)
-        # print("gripper open? ", obs.gripper_open)
+    def run(self, training_episodes):
+        obs = None
+        while self.global_episode < training_episodes:
+            if self.global_step % self.episode_length == 0:
+                print('Reset Episode')
+                descriptions, obs = self.task.reset()
+                obs = obs.get_low_dim_data()
+                print(descriptions)
+                self.global_episode += 1
 
-    def get_action(self, obs, noise=True):
+            #print("This is the obs:", obs)
+            #print("Input dim is: ", self.dim_inputs_actor)
+            #print("here are the limits: ", self.task.get_joint_upper_velocity_limits())
+            # predict action with actor
+            action = self.get_action([obs])
+            #print("This is the action vector: ", action)
+
+            # make a step
+            next_obs, reward, done = self.task.step(action)
+            next_obs = next_obs.get_low_dim_data()
+
+            # add experience to replay buffer
+            self.replay_buffer.append(obs, action, float(reward), next_obs, float(done))
+
+            # train if conditions are met
+            if self.global_step >= self.start_training and self.global_step % self.training_interval == 0:
+                print("Training")
+                self.train()
+
+            # increment and save next_obs as obs
+            self.global_step += 1
+            obs = next_obs
+
+        print('Done')
+        self.env.shutdown()
+
+    def get_action(self, obs, noise=True, scale=True):
         """
-        Predicts an action using the actor network
+        Predicts an action using the actor network. DO NOT USE WHILE TRAINING. Use predict() or noisy_predict() instead
         :param obs: received observation
         :param noise: if true adds noise to actions tensor
+        :param scale: if true scales actions | ONLY FOR ACTION_MODE ABS_JOINT_VELOCITY
         :return: returns an numpy array containing the corresponding actions
         """
-        return self.actor.noisy_predict(tf.constant(obs)) if noise else self.actor.predict(tf.constant(obs))
+        if noise:
+            actions = self.actor.noisy_predict(tf.constant(obs))
+        else:
+            actions = self.actor.predict(tf.constant(obs))
+        # squeeze since only one obs was given
+        actions = np.squeeze(actions)
+        if scale:
+            actions = self.scale_action(actions)
+        return actions
+
+    def scale_action(self, actions):
+        # in rad/s
+        max_vel_joints = self.task.get_joint_upper_velocity_limits()
+        max_vel_joints.append(1.0)  # add scaling for gripper (no scaling, action is discretized anyway)
+        max_vel_joints = np.array(max_vel_joints)
+        # action are between -1 and 1, so scaling is done by multiplication
+        actions = actions * max_vel_joints
+
+        # the gripper only accepts actions between 0 and 1 | clipping needed due to noise
+        actions[-1] = np.clip(0.5*actions[-1] + 0.5, 0, 1)
+
+        return actions
 
     @tf.function
     def _compute_td_error(self, states, actions, rewards, next_states, dones):
@@ -197,6 +257,12 @@ class DDPG(Agent):
     def train(self):
         # sample batch
         states, actions, rewards, next_states, dones = self.replay_buffer.sample_batch(self.batch_size)
+
+        states = tf.constant(states)
+        actions = tf.constant(actions)
+        rewards = tf.constant(rewards)
+        next_states = tf.constant(next_states)
+        dones = tf.constant(dones)
 
         @tf.function
         def train_inner():
