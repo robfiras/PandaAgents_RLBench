@@ -1,6 +1,7 @@
 import os
 import time
 import sys, getopt
+import datetime
 
 import numpy as np
 import tensorflow as tf
@@ -8,6 +9,7 @@ import tensorflow as tf
 from agents.ddpg_backend.target_update_ops import update_target_variables
 from agents.ddpg_backend.replay_buffer import ReplayBuffer
 from agents.ddpg_backend.ou_noise import OUNoise
+from agents.misc.logger import CmdLineLogger
 from agents.base import Agent
 
 # tf.config.experimental_run_functions_eagerly(True)
@@ -231,13 +233,14 @@ class DDPG(Agent):
 
     def run(self, training_episodes):
         obs = None
+        number_of_succ_episodes = 0
+        logger = CmdLineLogger(10, training_episodes)
         while self.global_episode < training_episodes:
             if self.global_step % self.episode_length == 0:
-                print('Reset Episode')
                 descriptions, obs = self.task.reset()
                 obs = obs.get_low_dim_data()
-                print(descriptions)
                 self.global_episode += 1
+                logger(self.global_episode, number_of_succ_episodes)
 
             # predict action with actor
             action = self.get_action([obs])
@@ -251,7 +254,6 @@ class DDPG(Agent):
 
             # train if conditions are met
             if self.global_step >= self.start_training and self.global_step % self.training_interval == 0:
-                print("Training")
                 crit_loss, act_loss = self.train()
 
             # save weights if needed
@@ -268,6 +270,7 @@ class DDPG(Agent):
             # increment and save next_obs as obs
             self.global_step += 1
             obs = next_obs
+            number_of_succ_episodes += reward
 
         print('Done')
         self.env.shutdown()
@@ -313,7 +316,8 @@ class DDPG(Agent):
     @tf.function
     def _compute_td_error(self, states, actions, rewards, next_states, dones):
         not_dones = 1.0 - dones
-        input_target_critic = tf.concat([next_states, actions], axis=1)
+        next_actions = self.target_actor(next_states)
+        input_target_critic = tf.concat([next_states, next_actions], axis=1)
         target_Q = self.target_critic(input_target_critic)
         target_Q = rewards + (not_dones * self.gamma * target_Q)
         target_Q = tf.stop_gradient(target_Q)
@@ -332,39 +336,39 @@ class DDPG(Agent):
         next_states = tf.constant(next_states)
         dones = tf.constant(dones)
 
-        @tf.function
-        def train_inner():
-            # --- Critic training ---
-            with tf.GradientTape() as tape:
-                td_errors = self._compute_td_error(states, actions, rewards, next_states, dones)
-
-                # lets use a squared error for errors less than 1 and a linear error for errors greater than 1 to reduce
-                # the impact of very large errors
-                td_errors = tf.abs(td_errors)
-                clipped_td_errors = tf.clip_by_value(td_errors, 0.0, 1.0)
-                linear_errors = 2 * (td_errors - clipped_td_errors)
-                critic_loss = tf.reduce_mean(tf.square(clipped_td_errors) + linear_errors)
-
-            # calculate the gradients and optimize
-            critic_gradients = tape.gradient(critic_loss, self.critic.trainable_variables)
-            self.optimizer_critic.apply_gradients(zip(critic_gradients, self.critic.trainable_variables))
-
-            # --- Actor training ---
-            with tf.GradientTape() as tape:
-                next_action = self.actor(states)
-                input_critic = tf.concat([states, next_action], axis=1)
-                actor_loss = -tf.reduce_mean(self.critic(input_critic))
-
-            # calculate the gradients and optimize
-            actor_gradients = tape.gradient(actor_loss, self.actor.trainable_variables)
-            self.optimizer_actor.apply_gradients(zip(actor_gradients, self.actor.trainable_variables))
-
-            # update target weights
-            update_target_variables(self.target_critic.weights, self.critic.weights, self.tau)
-            update_target_variables(self.target_actor.weights, self.actor.weights, self.tau)
-
-            return critic_loss, actor_loss
-
         # call the inner function
-        crit_loss, act_loss = train_inner()
+        crit_loss, act_loss = self.train_inner(states, actions, rewards, next_states, dones)
         return crit_loss, act_loss
+
+    @tf.function
+    def train_inner(self, states, actions, rewards, next_states, dones):
+        # --- Critic training ---
+        with tf.GradientTape() as tape:
+            td_errors = self._compute_td_error(states, actions, rewards, next_states, dones)
+
+            # lets use a squared error for errors less than 1 and a linear error for errors greater than 1 to reduce
+            # the impact of very large errors
+            td_errors = tf.abs(td_errors)
+            clipped_td_errors = tf.clip_by_value(td_errors, 0.0, 1.0)
+            linear_errors = 2 * (td_errors - clipped_td_errors)
+            critic_loss = tf.reduce_mean(tf.square(clipped_td_errors) + linear_errors)
+
+        # calculate the gradients and optimize
+        critic_gradients = tape.gradient(critic_loss, self.critic.trainable_variables)
+        self.optimizer_critic.apply_gradients(zip(critic_gradients, self.critic.trainable_variables))
+
+        # --- Actor training ---
+        with tf.GradientTape() as tape:
+            next_action = self.actor(states)
+            input_critic = tf.concat([states, next_action], axis=1)
+            actor_loss = -tf.reduce_mean(self.critic(input_critic))
+
+        # calculate the gradients and optimize
+        actor_gradients = tape.gradient(actor_loss, self.actor.trainable_variables)
+        self.optimizer_actor.apply_gradients(zip(actor_gradients, self.actor.trainable_variables))
+
+        # update target weights
+        update_target_variables(self.target_critic.weights, self.critic.weights, self.tau)
+        update_target_variables(self.target_actor.weights, self.actor.weights, self.tau)
+
+        return critic_loss, actor_loss
