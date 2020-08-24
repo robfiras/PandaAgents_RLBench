@@ -1,3 +1,5 @@
+import sys
+
 from rlbench.action_modes import ArmActionMode, ActionMode
 from rlbench.observation_config import ObservationConfig
 from rlbench.tasks.reach_target import ReachTarget
@@ -17,7 +19,7 @@ action_mode = ActionMode(ArmActionMode.ABS_JOINT_VELOCITY)
 env = Environment(action_mode=action_mode, obs_config=obs_config, headless=False)
 
 # create an agent
-agent = DDPG(env, ReachTarget, obs_config)
+agent = DDPG(sys.argv[1:], env, ReachTarget, obs_config)
 
 # define number of training steps
 training_episodes = 100

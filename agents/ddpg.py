@@ -1,11 +1,14 @@
-from agents.base import Agent
+import os
+import time
+import sys, getopt
+
 import numpy as np
-from rlbench.backend.observation import Observation
-from rlbench.observation_config import ObservationConfig
 import tensorflow as tf
-from agents.ddpg_backend.replay_buffer import ReplayBuffer
+
 from agents.ddpg_backend.target_update_ops import update_target_variables
+from agents.ddpg_backend.replay_buffer import ReplayBuffer
 from agents.ddpg_backend.ou_noise import OUNoise
+from agents.base import Agent
 
 # tf.config.experimental_run_functions_eagerly(True)
 tf.keras.backend.set_floatx('float64')
@@ -97,7 +100,9 @@ class CriticNetwork(tf.keras.Model):
 
 
 class DDPG(Agent):
-    def __init__(self, env,
+    def __init__(self,
+                 argv,
+                 env,
                  task_class,
                  obs_config,
                  gamma=0.9,
@@ -107,12 +112,13 @@ class DDPG(Agent):
                  episode_length=40,
                  training_interval=1,
                  start_training=0,
+                 save_weights_interval=400,
                  use_ou_noise=False,
                  buffer_size=50000,
                  lr_actor=0.0001,
                  lr_critic=0.001,
                  layers_actor=[400, 300],
-                 layers_critic=[400, 300]
+                 layers_critic=[400, 300],
                  ):
         """
         :param obs_config: configuration of the observation
@@ -123,6 +129,7 @@ class DDPG(Agent):
         :param episode_length: length of an episode
         :param training_interval: intervals used for training (default==1 -> train ech step)
         :param start_training: step at which training is started
+        :param save_weights_interval: interval in which the weights are saved
         :param use_ou_noise: if true, Ornstein-Uhlenbeck noise is used instead of Gaussian noise
         :param buffer_size: size of the replay buffer
         :param lr_actor: learning rate actor
@@ -155,7 +162,7 @@ class DDPG(Agent):
 
         # --- define actor and its target---
         self.actor = ActorNetwork(layers_actor, self.dim_actions, sigma=sigma, use_ou_noise=use_ou_noise)
-        self.target_actor = ActorNetwork(layers_actor,  self.dim_actions)
+        self.target_actor = ActorNetwork(layers_actor,  self.dim_actions, sigma=sigma, use_ou_noise=use_ou_noise)
         # instantiate the models (if we do not instantiate the model, we can not copy their weights)
         self.actor.build((1, self.dim_inputs_actor))
         self.target_actor.build((1, self.dim_inputs_actor))
@@ -175,6 +182,53 @@ class DDPG(Agent):
         # setup the critic's optimizer
         self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=lr_critic)
 
+        # setup logging dir
+        self.argv = argv
+        self.root_log_dir = None
+        self.use_tensorboard = False
+        self.save_weights = False
+        self.opts = None
+        self.args = None
+        self.eval_opts_args(argv)
+        self.summary_writer = None
+        if self.save_weights:
+            self.save_weights_interval = save_weights_interval
+        # add an unique id for logging
+        if (self.use_tensorboard or self.save_weights) and self.root_log_dir:
+            run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
+            self.root_log_dir = os.path.join(self.root_log_dir, run_id, "")
+        if self.use_tensorboard:
+            self.summary_writer = tf.summary.create_file_writer(logdir=self.root_log_dir)
+
+    def eval_opts_args(self, argv):
+        def print_help_message():
+            print("usage: main.py -l <logging_dir> -t -w")
+            print("usage:main.py -log_dir /path/to/dir -tensorboard -save_weights")
+        try:
+            self.opts, self.args = getopt.getopt(argv, "l:tw", ["log_dir=", "tensorboard", "save_weights"])
+        except getopt.GetoptError:
+            print_help_message()
+            sys.exit(2)
+
+        for opt, arg in self.opts:
+            if opt in ("-h", "--help"):
+                print_help_message()
+            elif opt in ("-l", "--log_dir"):
+                self.root_log_dir = arg
+            elif opt in ("-t", "--tensorboard"):
+                self.use_tensorboard = True
+            elif opt in ("-w", "--save_weights"):
+                self.save_weights = True
+
+        if not self.root_log_dir and (self.save_weights or self.use_tensorboard):
+            print("You can not use tensorboard without providing a logging directory!")
+            print_help_message()
+            sys.exit(2)
+        elif self.root_log_dir and not (self.save_weights and self.use_tensorboard):
+            print("You have set a logging path but neither tensorboard nor saving weights are activated!")
+            print("Please activate at least one of them or don't set logging path.")
+            print_help_message()
+
     def run(self, training_episodes):
         obs = None
         while self.global_episode < training_episodes:
@@ -185,12 +239,8 @@ class DDPG(Agent):
                 print(descriptions)
                 self.global_episode += 1
 
-            #print("This is the obs:", obs)
-            #print("Input dim is: ", self.dim_inputs_actor)
-            #print("here are the limits: ", self.task.get_joint_upper_velocity_limits())
             # predict action with actor
             action = self.get_action([obs])
-            #print("This is the action vector: ", action)
 
             # make a step
             next_obs, reward, done = self.task.step(action)
@@ -202,7 +252,18 @@ class DDPG(Agent):
             # train if conditions are met
             if self.global_step >= self.start_training and self.global_step % self.training_interval == 0:
                 print("Training")
-                self.train()
+                crit_loss, act_loss = self.train()
+
+            # save weights if needed
+            if self.save_weights and self.global_step % self.save_weights_interval == 0:
+                self.save_all_models()
+
+            # log to tensorboard if needed
+            if self.use_tensorboard:
+                with self.summary_writer.as_default():
+                    tf.summary.scalar('Critic-Loss', crit_loss, step=self.global_step)
+                    tf.summary.scalar('Actor-Loss', act_loss, step=self.global_step)
+                    tf.summary.scalar('Reward', reward, step=self.global_step)
 
             # increment and save next_obs as obs
             self.global_step += 1
@@ -241,6 +302,13 @@ class DDPG(Agent):
         actions[-1] = np.clip(0.5*actions[-1] + 0.5, 0, 1)
 
         return actions
+
+    def save_all_models(self):
+        path_to_dir = os.path.join(self.root_log_dir, "weights", "")
+        self.actor.save(path_to_dir + "actor")
+        # self.target_actor.save(path_to_dir + "target_actor")
+        self.critic.save(path_to_dir + "critic")
+        # self.target_critic.save(path_to_dir + "target_critic")
 
     @tf.function
     def _compute_td_error(self, states, actions, rewards, next_states, dones):
@@ -299,59 +367,4 @@ class DDPG(Agent):
 
         # call the inner function
         crit_loss, act_loss = train_inner()
-
-        # TODO: log to tensorboard
-
-
-
-
-
-
-
-
-
-
-
-
-# state = [0.34, 0.343]
-# action = [0.34, 0.343, 0.34, 0.343,0.34, 0.343,0.34, 0.343,0.34]
-# reward = 0.22
-# next_state = [0.34, 0.343]
-# done = 1
-#
-# agent = DDPG(2,9)
-#
-# agent.replay_buffer.append(state, action, reward, next_state, done)
-#
-# state = [0.3524, 0.343]
-# action = [0.65, 0.88343, 0.665834, 0.343,0.565, 0.56,0.34, 0.3543,0.34]
-# reward = 0.22
-# next_state = [0.174, 0.345473]
-# done = 0.0
-#
-# agent.replay_buffer.append(state, action, reward, next_state, done)
-# agent.train()
-#
-
-#print(agent.get_action([[0.98, 0.47], [0.25, 0.2]]))
-
-"""
-actor = ActorNetwork([400, 300], 7)
-ou_actor = ActorNetwork([400, 300], 7, use_ou_noise=True)
-
-# update_target_variables(ou_actor.weights, actor.weights, tau=1.0)
-
-
-actor.build((1, 2))
-ou_actor.build((1, 2))
-
-update_target_variables(ou_actor.weights, actor.weights, tau=1.0)
-
-features = tf.constant([[2.0, 3.0], [2.0, 3.0], [2.0, 3.0]])
-print("Ohne noise: ", actor.predict(features))
-print("Mit noise: ", actor.noisy_predict(features))
-
-print("OU -> Ohne noise: ", ou_actor.predict(features))
-print("OU -> Mit noise: ", ou_actor.noisy_predict(features))
-
-"""
+        return crit_loss, act_loss
