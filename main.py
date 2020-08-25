@@ -16,7 +16,7 @@ obs_config.set_all_low_dim(obs_only_low_dim)
 
 # define action mode and environment
 action_mode = ActionMode(ArmActionMode.ABS_JOINT_VELOCITY)
-env = Environment(action_mode=action_mode, obs_config=obs_config, headless=False)
+env = Environment(action_mode=action_mode, obs_config=obs_config, headless=True)
 
 # create an agent
 agent = DDPG(sys.argv[1:], env, ReachTarget, obs_config)
