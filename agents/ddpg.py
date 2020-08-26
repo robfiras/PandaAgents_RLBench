@@ -253,15 +253,16 @@ class DDPG(Agent):
             self.replay_buffer.append(obs, action, float(reward), next_obs, float(done))
 
             # train if conditions are met
-            if self.global_step >= self.start_training and self.global_step % self.training_interval == 0:
+            cond_train = (self.global_step >= self.start_training and self.global_step % self.training_interval == 0)
+            if cond_train:
                 crit_loss, act_loss = self.train()
 
             # save weights if needed
-            if self.save_weights and self.global_step % self.save_weights_interval == 0:
+            if self.save_weights and self.global_step % self.save_weights_interval == 0 and self.global_step > self.start_training:
                 self.save_all_models()
 
             # log to tensorboard if needed
-            if self.use_tensorboard:
+            if self.use_tensorboard and cond_train:
                 with self.summary_writer.as_default():
                     tf.summary.scalar('Critic-Loss', crit_loss, step=self.global_step)
                     tf.summary.scalar('Actor-Loss', act_loss, step=self.global_step)
