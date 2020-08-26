@@ -16,7 +16,10 @@ class CmdLineLogger:
             eta = ((self.training_episodes - episode) / self.logging_interval) * elapsed_time
             eta = datetime.timedelta(seconds=eta)
             print(
-                '%d.Episode - Status %.2f %% |%s%s| Number of successful Episodes %d | Time taken for the last %d Episodes: %f sec. | Aprox. Time needed till end %s\r' % (
-                    episode, (episode / self.training_episodes)*100, "█" * norm_status,
-                    "." * (self.normalization - norm_status - 1), number_of_succ_episodes, self.logging_interval, elapsed_time, str(eta)), end=' ')
+                '%d.Episode - Status %.2f %% |%s%s| Number of successful Episodes %d | Time taken for the last %d Episodes: %f sec. | Aprox. Time needed till %s \r' % (
+                    episode, (episode / self.training_episodes)*100, '#' * norm_status,
+                    "." * (self.normalization - norm_status - 1), number_of_succ_episodes, self.logging_interval,
+                    elapsed_time, str(eta)), end=' ')
+
             self.start = time.time()
+

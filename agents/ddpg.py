@@ -113,7 +113,7 @@ class DDPG(Agent):
                  batch_size=32,
                  episode_length=40,
                  training_interval=1,
-                 start_training=0,
+                 start_training=1000,
                  save_weights_interval=400,
                  use_ou_noise=False,
                  buffer_size=50000,
