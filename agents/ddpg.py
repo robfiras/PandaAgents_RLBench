@@ -1,6 +1,5 @@
 import os
 import time
-import sys, getopt
 import datetime
 
 import numpy as np
@@ -10,6 +9,7 @@ from agents.ddpg_backend.target_update_ops import update_target_variables
 from agents.ddpg_backend.replay_buffer import ReplayBuffer
 from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
+from agents.misc.opts_arg_evaluator import eval_opts_args
 from agents.base import Agent
 
 # tf.config.experimental_run_functions_eagerly(True)
@@ -162,14 +162,34 @@ class DDPG(Agent):
         # setup the replay buffer
         self.replay_buffer = ReplayBuffer(buffer_size)
 
+        # parse the given arguments
+        self.argv = argv
+        self.root_log_dir, self.use_tensorboard, self.save_weights, self.run_id, self.path_to_model = eval_opts_args(argv)
+        self.summary_writer = None
+        if self.save_weights:
+            self.save_weights_interval = save_weights_interval
+        # add an unique id for logging
+        if (self.use_tensorboard or self.save_weights) and self.root_log_dir:
+            if not self.run_id:
+                self.run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
+            self.root_log_dir = os.path.join(self.root_log_dir, self.run_id, "")
+        if self.use_tensorboard:
+            self.summary_writer = tf.summary.create_file_writer(logdir=self.root_log_dir)
+
         # --- define actor and its target---
         self.actor = ActorNetwork(layers_actor, self.dim_actions, sigma=sigma, use_ou_noise=use_ou_noise)
         self.target_actor = ActorNetwork(layers_actor,  self.dim_actions, sigma=sigma, use_ou_noise=use_ou_noise)
         # instantiate the models (if we do not instantiate the model, we can not copy their weights)
         self.actor.build((1, self.dim_inputs_actor))
         self.target_actor.build((1, self.dim_inputs_actor))
-        # copy the weights to the target actor
-        update_target_variables(self.target_actor.weights, self.actor.weights, tau=1.0)
+        # check if we need to load weights
+        if self.path_to_model:
+            print("Loading weights from %s to actor..." % self.path_to_model)
+            self.actor.load_weights(os.path.join(self.path_to_model, "actor", "variables", "variables"))
+            self.target_actor.load_weights(os.path.join(self.path_to_model, "actor", "variables", "variables"))
+        else:
+            # copy the weights to the target actor
+            update_target_variables(self.target_actor.weights, self.actor.weights, tau=1.0)
         # setup the actor's optimizer
         self.optimizer_actor = tf.keras.optimizers.Adam(learning_rate=lr_actor)
 
@@ -179,57 +199,16 @@ class DDPG(Agent):
         # instantiate the models (if we do not instantiate the model, we can not copy their weights)
         self.critic.build((1, self.dim_inputs_critic))
         self.target_critic.build((1, self.dim_inputs_critic))
-        # copy the weights to the target critic
-        update_target_variables(self.target_critic.weights, self.critic.weights, tau=1.0)
+        # check if we need to load weights
+        if self.path_to_model:
+            print("Loading weights from %s to critic..." % self.path_to_model)
+            self.critic.load_weights(os.path.join(self.path_to_model, "critic", "variables", "variables"))
+            self.target_critic.load_weights(os.path.join(self.path_to_model, "critic", "variables", "variables"))
+        else:
+            # copy the weights to the target critic
+            update_target_variables(self.target_critic.weights, self.critic.weights, tau=1.0)
         # setup the critic's optimizer
         self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=lr_critic)
-
-        # setup logging dir
-        self.argv = argv
-        self.root_log_dir = None
-        self.use_tensorboard = False
-        self.save_weights = False
-        self.opts = None
-        self.args = None
-        self.eval_opts_args(argv)
-        self.summary_writer = None
-        if self.save_weights:
-            self.save_weights_interval = save_weights_interval
-        # add an unique id for logging
-        if (self.use_tensorboard or self.save_weights) and self.root_log_dir:
-            run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
-            self.root_log_dir = os.path.join(self.root_log_dir, run_id, "")
-        if self.use_tensorboard:
-            self.summary_writer = tf.summary.create_file_writer(logdir=self.root_log_dir)
-
-    def eval_opts_args(self, argv):
-        def print_help_message():
-            print("usage: main.py -l <logging_dir> -t -w")
-            print("usage:main.py -log_dir /path/to/dir -tensorboard -save_weights")
-        try:
-            self.opts, self.args = getopt.getopt(argv, "l:tw", ["log_dir=", "tensorboard", "save_weights"])
-        except getopt.GetoptError:
-            print_help_message()
-            sys.exit(2)
-
-        for opt, arg in self.opts:
-            if opt in ("-h", "--help"):
-                print_help_message()
-            elif opt in ("-l", "--log_dir"):
-                self.root_log_dir = arg
-            elif opt in ("-t", "--tensorboard"):
-                self.use_tensorboard = True
-            elif opt in ("-w", "--save_weights"):
-                self.save_weights = True
-
-        if not self.root_log_dir and (self.save_weights or self.use_tensorboard):
-            print("You can not use tensorboard without providing a logging directory!")
-            print_help_message()
-            sys.exit(2)
-        elif self.root_log_dir and not (self.save_weights and self.use_tensorboard):
-            print("You have set a logging path but neither tensorboard nor saving weights are activated!")
-            print("Please activate at least one of them or don't set logging path.")
-            print_help_message()
 
     def run(self, training_episodes):
         obs = None
