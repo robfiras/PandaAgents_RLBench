@@ -2,20 +2,23 @@ import numpy as np
 from rlbench.backend.observation import Observation
 from rlbench.observation_config import ObservationConfig
 from rlbench.environment import Environment
-
+from rlbench.action_modes import ActionMode
 
 
 class Agent(object):
 
-    def __init__(self, env: Environment, task_class, obs_config: ObservationConfig):
-        self.env = env
+    def __init__(self, action_mode: ActionMode, task_class, obs_config: ObservationConfig, headless):
+        self.env = Environment(action_mode=action_mode,
+                               obs_config=obs_config,
+                               headless=headless)
+
         self.obs_config = obs_config
 
         if not self.only_low_dim_obs:
             raise ValueError("High-dim observations currently not supported!")
 
-        env.launch()
-        self.task = env.get_task(task_class)
+        self.env.launch()
+        self.task = self.env.get_task(task_class)
 
         print('Reset Episode')
         descriptions, obs = self.task.reset()
@@ -23,7 +26,7 @@ class Agent(object):
 
         # determine dimensions
         self.dim_observations = np.shape(obs.get_low_dim_data())[0]    # TODO: find better way
-        self.dim_actions = env.action_size
+        self.dim_actions = self.env.action_size
 
     @property
     def only_low_dim_obs(self) -> bool:

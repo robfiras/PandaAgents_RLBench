@@ -17,18 +17,22 @@ def eval_opts_args(argv):
     save_weights = False
     custom_run_id = None
     load_model_run_id = None
+    no_training = False
     path_to_model = None
     training_episodes = None
+    run_headless = False
 
     try:
-        opts, args = getopt.getopt(argv, "l:i:m:e:tw", ["log_dir=", "id=", "load_model=", "episodes=", "tensorboard", "save_weights"])
+        opts, args = getopt.getopt(argv, "l:i:m:e:twhn", ["log_dir=", "id=", "load_model=",
+                                                          "episodes=", "tensorboard", "save_weights",
+                                                          "no_training", "headless"])
     except getopt.GetoptError:
         print_help_message()
-        sys.exit(2)
 
     for opt, arg in opts:
         if opt in ("-h", "--help"):
             print_help_message()
+            sys.exit()
         elif opt in ("-l", "--log_dir"):
             root_log_dir = arg
         elif opt in ("-t", "--tensorboard"):
@@ -41,13 +45,16 @@ def eval_opts_args(argv):
             load_model_run_id = arg
         elif opt in ("-e", "--episodes"):
             training_episodes = int(arg)
+        elif opt in ("-h", "--headless"):
+            run_headless = True
+        elif opt == "--no_training":
+            no_training = True
 
     if not root_log_dir and (save_weights or use_tensorboard):
         print("You can not use tensorboard without providing a logging directory!")
         print_help_message()
-        sys.exit(2)
-    elif root_log_dir and not (save_weights and use_tensorboard):
-        print("You have set a logging path but neither tensorboard nor saving weights are activated!")
+    elif root_log_dir and not (save_weights and use_tensorboard) and not load_model_run_id:
+        print("You have set a logging path but neither tensorboard, saving_weights nor load_model are activated!")
         print("Please activate at least one of them or don't set logging path.")
         print_help_message()
 
@@ -55,7 +62,6 @@ def eval_opts_args(argv):
     if not os.path.exists(root_log_dir):
         print("Given logging directory %s does not exist. Please double check!" % root_log_dir)
         print_help_message()
-        sys.exit(2)
     # check if model to be loaded exists
     if load_model_run_id:
         path_to_model = os.path.join(root_log_dir, load_model_run_id)
@@ -75,15 +81,28 @@ def eval_opts_args(argv):
                 exit_not_found = True
             if exit_not_found:
                 sys.exit()
+
     return {"root_dir": root_log_dir,
             "use_tensorboard": use_tensorboard,
             "save_weights": save_weights,
             "run_id": custom_run_id,
             "path_to_model": path_to_model,
-            "training_episodes": training_episodes}
+            "training_episodes": training_episodes,
+            "no_training": no_training,
+            "headless": run_headless}
 
 
 def print_help_message():
-    print("usage: main.py -l <logging_dir> -t -w -i my_custom_run_id -m my_model_name -e 100")
-    print("usage:main.py --log_dir /path/to/dir --tensorboard --save_weights "
-          "--id my_custom_run_id --load_model my_model_name --episodes 100")
+    print("\nUsage: main.py -l <logging_dir> -e 100 -m my_model_name \n\n"
+          "Options:\n"
+          "-e, --episodes <number_episodes>    Sets the number of episodes to <number_episodes>\n"
+          "-l, --log_dir <logging_dir>         Sets the logging directory to <logging_dir>\n"
+          "-w, --save_weights                  If set, weights are save at <logging_dir>\n"
+          "-t, --tensorboard                   If set, stores tensorboard logs at <logging_dir>\n"
+          "-i, --id <id>                       Sets the run-id for logging to <id>\n"
+          "-m, --load_model <model_location>   Sets the location of the model to be loaded \n"
+          "-h, --headless                      If set, runs Coppelia-simulator in headless-mode\n"
+          "-n, --no_training                   If set, does not train the models\n")
+    sys.exit()
+
+

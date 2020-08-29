@@ -104,9 +104,9 @@ class CriticNetwork(tf.keras.Model):
 class DDPG(Agent):
     def __init__(self,
                  argv,
-                 env,
-                 task_class,
+                 action_mode,
                  obs_config,
+                 task_class,
                  gamma=0.9,
                  tau=0.001,
                  sigma=0.1,
@@ -140,8 +140,20 @@ class DDPG(Agent):
         :param layers_critic: number of units in each dense layer in the actor (len of list defines number of layers)
         """
 
+        # parse arguments
+        self.argv = argv
+        options = eval_opts_args(argv)
+        self.root_log_dir = options["root_dir"]
+        self.use_tensorboard = options["use_tensorboard"]
+        self.save_weights = options["save_weights"]
+        self.run_id = options["run_id"]
+        self.path_to_model = options["path_to_model"]
+        self.training_episodes = options["training_episodes"]
+        self.no_training = options["no_training"]
+        self.headless = options["headless"]
+
         # call parent constructor
-        super(DDPG, self).__init__(env, task_class, obs_config)
+        super(DDPG, self).__init__(action_mode, task_class, obs_config, self.headless)
 
         # define the dimensions
         self.dim_inputs_actor = self.dim_observations
@@ -162,15 +174,6 @@ class DDPG(Agent):
         # setup the replay buffer
         self.replay_buffer = ReplayBuffer(buffer_size)
 
-        # parse the given arguments
-        self.argv = argv
-        options = eval_opts_args(argv)
-        self.root_log_dir = options["root_dir"]
-        self.use_tensorboard = options["use_tensorboard"]
-        self.save_weights = options["save_weights"]
-        self.run_id = options["run_id"]
-        self.path_to_model = options["path_to_model"]
-        self.training_episodes = options["training_episodes"]
         if not self.training_episodes:
             self.training_episodes = 1000   # default value
         if self.save_weights:
@@ -231,7 +234,7 @@ class DDPG(Agent):
                 logger(self.global_episode, number_of_succ_episodes)
 
             # predict action with actor
-            action = self.get_action([obs])
+            action = self.get_action([obs], noise=(False if self.no_training else True))
 
             # make a step
             next_obs, reward, done = self.task.step(action)
@@ -241,7 +244,9 @@ class DDPG(Agent):
             self.replay_buffer.append(obs, action, float(reward), next_obs, float(done))
 
             # train if conditions are met
-            cond_train = (self.global_step >= self.start_training and self.global_step % self.training_interval == 0)
+            cond_train = (self.global_step >= self.start_training and
+                          self.global_step % self.training_interval == 0 and
+                          not self.no_training)
             if cond_train:
                 crit_loss, act_loss = self.train()
 
