@@ -58,16 +58,15 @@ obs_only_low_dim = True     # currently only low-dim supported
 obs_config.set_all_high_dim(not obs_only_low_dim)
 obs_config.set_all_low_dim(obs_only_low_dim)
 
-# define action mode and environment
+# define action mode
 action_mode = ActionMode(ArmActionMode.ABS_JOINT_VELOCITY)
-env = Environment(action_mode=action_mode, obs_config=obs_config, headless=False)
 
 # create an agent
-agent = DDPG(sys.argv[1:], env, ReachTarget, obs_config)
-
-# define number of training steps
-training_episodes = 5000
+agent = DDPG(argv=sys.argv[1:],
+             action_mode=action_mode,
+             obs_config=obs_config,
+             task_class=ReachTarget)
 
 # run agent
-agent.run(training_episodes)
+agent.run()
 ```
