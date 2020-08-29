@@ -21,11 +21,8 @@ env = Environment(action_mode=action_mode, obs_config=obs_config, headless=True)
 # create an agent
 agent = DDPG(sys.argv[1:], env, ReachTarget, obs_config)
 
-# define number of training steps
-training_episodes = 10000
-
 # run agent
-agent.run(training_episodes)
+agent.run()
 
 
 

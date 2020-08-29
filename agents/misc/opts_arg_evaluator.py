@@ -18,9 +18,10 @@ def eval_opts_args(argv):
     custom_run_id = None
     load_model_run_id = None
     path_to_model = None
+    training_episodes = None
 
     try:
-        opts, args = getopt.getopt(argv, "l:i:m:tw", ["log_dir=", "id=", "load_model=", "tensorboard", "save_weights"])
+        opts, args = getopt.getopt(argv, "l:i:m:e:tw", ["log_dir=", "id=", "load_model=", "episodes=", "tensorboard", "save_weights"])
     except getopt.GetoptError:
         print_help_message()
         sys.exit(2)
@@ -38,6 +39,8 @@ def eval_opts_args(argv):
             custom_run_id = arg
         elif opt in ("-m", "--load_model"):
             load_model_run_id = arg
+        elif opt in ("-e", "--episodes"):
+            training_episodes = int(arg)
 
     if not root_log_dir and (save_weights or use_tensorboard):
         print("You can not use tensorboard without providing a logging directory!")
@@ -72,9 +75,15 @@ def eval_opts_args(argv):
                 exit_not_found = True
             if exit_not_found:
                 sys.exit()
-    return root_log_dir, use_tensorboard, save_weights, custom_run_id, path_to_model
+    return {"root_dir": root_log_dir,
+            "use_tensorboard": use_tensorboard,
+            "save_weights": save_weights,
+            "run_id": custom_run_id,
+            "path_to_model": path_to_model,
+            "training_episodes": training_episodes}
 
 
 def print_help_message():
-    print("usage: main.py -l <logging_dir> -t -w -i my_custom_run_id -m my_model_name")
-    print("usage:main.py --log_dir /path/to/dir --tensorboard --save_weights --id my_custom_run_id --load_model my_model_name")
+    print("usage: main.py -l <logging_dir> -t -w -i my_custom_run_id -m my_model_name -e 100")
+    print("usage:main.py --log_dir /path/to/dir --tensorboard --save_weights "
+          "--id my_custom_run_id --load_model my_model_name --episodes 100")

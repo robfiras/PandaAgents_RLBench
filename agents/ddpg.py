@@ -164,15 +164,24 @@ class DDPG(Agent):
 
         # parse the given arguments
         self.argv = argv
-        self.root_log_dir, self.use_tensorboard, self.save_weights, self.run_id, self.path_to_model = eval_opts_args(argv)
-        self.summary_writer = None
+        options = eval_opts_args(argv)
+        self.root_log_dir = options["root_dir"]
+        self.use_tensorboard = options["use_tensorboard"]
+        self.save_weights = options["save_weights"]
+        self.run_id = options["run_id"]
+        self.path_to_model = options["path_to_model"]
+        self.training_episodes = options["training_episodes"]
+        if not self.training_episodes:
+            self.training_episodes = 1000   # default value
         if self.save_weights:
             self.save_weights_interval = save_weights_interval
-        # add an unique id for logging
+        # add an custom/unique id for logging
         if (self.use_tensorboard or self.save_weights) and self.root_log_dir:
             if not self.run_id:
                 self.run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
             self.root_log_dir = os.path.join(self.root_log_dir, self.run_id, "")
+        # setup tensorboard
+        self.summary_writer = None
         if self.use_tensorboard:
             self.summary_writer = tf.summary.create_file_writer(logdir=self.root_log_dir)
 
@@ -210,11 +219,11 @@ class DDPG(Agent):
         # setup the critic's optimizer
         self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=lr_critic)
 
-    def run(self, training_episodes):
+    def run(self):
         obs = None
         number_of_succ_episodes = 0
-        logger = CmdLineLogger(10, training_episodes)
-        while self.global_episode < training_episodes:
+        logger = CmdLineLogger(10, self.training_episodes)
+        while self.global_episode < self.training_episodes:
             if self.global_step % self.episode_length == 0:
                 descriptions, obs = self.task.reset()
                 obs = obs.get_low_dim_data()
