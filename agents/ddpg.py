@@ -190,7 +190,7 @@ class DDPG(Agent):
                                           path_to_db=self.root_log_dir,
                                           dim_observations=self.dim_observations,
                                           dim_actions=self.dim_actions,
-                                          write=True, save_interval=40)
+                                          write=True)
 
         # --- define actor and its target---
         self.actor = ActorNetwork(layers_actor, self.dim_actions, sigma=sigma, use_ou_noise=use_ou_noise)
@@ -328,7 +328,6 @@ class DDPG(Agent):
     def train(self):
         # sample batch
         states, actions, rewards, next_states, dones = self.replay_buffer.sample_batch(self.batch_size)
-        states_old, actions_old, rewards_old, next_states_old, dones_old = self.replay_buffer.sample_batch_old(self.batch_size)
 
         states = tf.constant(states)
         actions = tf.constant(actions)
