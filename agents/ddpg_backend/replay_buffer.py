@@ -39,28 +39,28 @@ class ReplayBuffer(object):
         if (self.dim_observations is None or self.dim_actions is None) and self.path_to_db_read:
             raise TypeError("You can not read, if no dimensions for the observations and actions are specified.")
 
-        # check if the db exists
+        # check if the db fore reading exists
         if self.path_to_db_read:
             self.path_to_db_read = os.path.join(self.path_to_db_read, "replay_buffer.db")
             if not os.path.exists(self.path_to_db_read):
                 raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), self.path_to_db_read)
-        if self.write and self.path_to_db_write:
-            self.path_to_db_write = os.path.join(self.path_to_db_write, "replay_buffer.db")
-            if not os.path.exists(self.path_to_db_write):
-                raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), self.path_to_db_write)
 
         # read data into the buffer if needed
         if self.path_to_db_read:
             self.read_buffer(n_samples=maxlen)
 
-        # create connection to database and create if it does not exist yet
-        self.conn = sqlite3.connect(self.path_to_db_write)
-        self.c = self.conn.cursor()
+        # check if we need to save the buffer during training 
+        if self.write:
+            self.path_to_db_write = os.path.join(self.path_to_db_write, "replay_buffer.db")
 
-        # create the table "data" of it does not exist
-        sql_create_data_table = """ CREATE TABLE IF NOT EXISTS data (%s); """ % self.create_column_names()
-        self.c.execute(sql_create_data_table)
-        self.conn.commit()
+            # create connection to database and create if it does not exist yet
+            self.conn = sqlite3.connect(self.path_to_db_write)
+            self.c = self.conn.cursor()
+
+            # create the table "data" of it does not exist
+            sql_create_data_table = """ CREATE TABLE IF NOT EXISTS data (%s); """ % self.create_column_names()
+            self.c.execute(sql_create_data_table)
+            self.conn.commit()
 
     def __del__(self):
         # save the buffer one last time and close connection
@@ -75,7 +75,7 @@ class ReplayBuffer(object):
         self.index = (self.index + 1) % self.maxlen
         self.number_of_samples_seen += 1
         # check if buffer needs to be saved
-        if self.number_of_samples_seen % self.save_interval == 0:
+        if self.write and self.number_of_samples_seen % self.save_interval == 0:
             self.save_buffer()
 
     def sample(self, batch_size, with_replacement=True):
