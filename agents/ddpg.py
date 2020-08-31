@@ -234,7 +234,8 @@ class DDPG(Agent):
         number_of_succ_episodes = 0
         logger = CmdLineLogger(10, self.training_episodes)
         while self.global_episode < self.training_episodes:
-            if self.global_step % self.episode_length == 0:
+            # reset episode if maximal length is reached or task is done
+            if self.global_step % self.episode_length == 0 or done:
                 descriptions, obs = self.task.reset()
                 obs = obs.get_low_dim_data()
                 self.global_episode += 1

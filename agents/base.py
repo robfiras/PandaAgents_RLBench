@@ -8,11 +8,12 @@ from rlbench.action_modes import ActionMode
 class Agent(object):
 
     def __init__(self, action_mode: ActionMode, task_class, obs_config: ObservationConfig, headless):
+
+        self.obs_config = obs_config
+
         self.env = Environment(action_mode=action_mode,
                                obs_config=obs_config,
                                headless=headless)
-
-        self.obs_config = obs_config
 
         if not self.only_low_dim_obs:
             raise ValueError("High-dim observations currently not supported!")
