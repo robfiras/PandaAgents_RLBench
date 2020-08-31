@@ -40,12 +40,14 @@ class ReplayBuffer(object):
             raise TypeError("You can not read, if no dimensions for the observations and actions are specified.")
 
         # check if the db exists
-        self.path_to_db_read = os.path.join(self.path_to_db_read, "replay_buffer.db")
-        self.path_to_db_write = os.path.join(self.path_to_db_write, "replay_buffer.db")
-        if self.path_to_db_read and not os.path.exists(self.path_to_db_read):
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), self.path_to_db_read)
-        if self.write and self.path_to_db_write and not os.path.exists(self.path_to_db_write):
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), self.path_to_db_write)
+        if self.path_to_db_read:
+            self.path_to_db_read = os.path.join(self.path_to_db_read, "replay_buffer.db")
+            if not os.path.exists(self.path_to_db_read):
+                raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), self.path_to_db_read)
+        if self.write and self.path_to_db_write:
+            self.path_to_db_write = os.path.join(self.path_to_db_write, "replay_buffer.db")
+            if not os.path.exists(self.path_to_db_write):
+                raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), self.path_to_db_write)
 
         # read data into the buffer if needed
         if self.path_to_db_read:
