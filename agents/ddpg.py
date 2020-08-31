@@ -113,7 +113,7 @@ class DDPG(Agent):
                  batch_size=32,
                  episode_length=40,
                  training_interval=1,
-                 start_training=1000,
+                 start_training=10,
                  save_weights_interval=400,
                  use_ou_noise=False,
                  buffer_size=50000,
@@ -171,9 +171,6 @@ class DDPG(Agent):
         self.global_episode = 0
         self.use_ou_noise = use_ou_noise
 
-        # setup the replay buffer
-        self.replay_buffer = ReplayBuffer(buffer_size)
-
         if not self.training_episodes:
             self.training_episodes = 1000   # default value
         if self.save_weights:
@@ -187,6 +184,13 @@ class DDPG(Agent):
         self.summary_writer = None
         if self.use_tensorboard:
             self.summary_writer = tf.summary.create_file_writer(logdir=self.root_log_dir)
+
+        # setup the replay buffer
+        self.replay_buffer = ReplayBuffer(buffer_size,
+                                          path_to_db=self.root_log_dir,
+                                          dim_observations=self.dim_observations,
+                                          dim_actions=self.dim_actions,
+                                          write=True, save_interval=40)
 
         # --- define actor and its target---
         self.actor = ActorNetwork(layers_actor, self.dim_actions, sigma=sigma, use_ou_noise=use_ou_noise)
@@ -259,7 +263,8 @@ class DDPG(Agent):
                 with self.summary_writer.as_default():
                     tf.summary.scalar('Critic-Loss', crit_loss, step=self.global_step)
                     tf.summary.scalar('Actor-Loss', act_loss, step=self.global_step)
-                    tf.summary.scalar('Reward', reward, step=self.global_step)
+                    tf.summary.scalar('Reward', float(reward), step=self.global_step)
+                    tf.summary.scalar('Cumulated Reward', float(number_of_succ_episodes), step=self.global_step)
 
             # increment and save next_obs as obs
             self.global_step += 1
@@ -323,6 +328,7 @@ class DDPG(Agent):
     def train(self):
         # sample batch
         states, actions, rewards, next_states, dones = self.replay_buffer.sample_batch(self.batch_size)
+        states_old, actions_old, rewards_old, next_states_old, dones_old = self.replay_buffer.sample_batch_old(self.batch_size)
 
         states = tf.constant(states)
         actions = tf.constant(actions)
