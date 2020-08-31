@@ -151,6 +151,8 @@ class DDPG(Agent):
         self.training_episodes = options["training_episodes"]
         self.no_training = options["no_training"]
         self.headless = options["headless"]
+        self.path_to_read_buffer = options["path_to_read_buffer"]
+        self.write_buffer = options["write_buffer"]
 
         # call parent constructor
         super(DDPG, self).__init__(action_mode, task_class, obs_config, self.headless)
@@ -187,10 +189,11 @@ class DDPG(Agent):
 
         # setup the replay buffer
         self.replay_buffer = ReplayBuffer(buffer_size,
-                                          path_to_db=self.root_log_dir,
+                                          path_to_db_write=self.root_log_dir,
+                                          path_to_db_read=self.path_to_read_buffer,
                                           dim_observations=self.dim_observations,
                                           dim_actions=self.dim_actions,
-                                          write=True)
+                                          write=self.write_buffer)
 
         # --- define actor and its target---
         self.actor = ActorNetwork(layers_actor, self.dim_actions, sigma=sigma, use_ou_noise=use_ou_noise)

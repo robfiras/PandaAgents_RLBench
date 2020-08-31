@@ -13,7 +13,7 @@ class ReplayBuffer(object):
     """
 
     def __init__(self, maxlen, dim_observations=None, dim_actions=None,
-                 path_to_db=None, read=False, write=False, save_interval=None):
+                 path_to_db_read=None, path_to_db_write=None, write=False, save_interval=None):
         self.maxlen = maxlen
         if not save_interval:
             self.save_interval = maxlen
@@ -26,25 +26,33 @@ class ReplayBuffer(object):
         self.index = 0
         self.length = 0
         self.write = write
-        self.read = read
-        self.path = path_to_db
+        self.path_to_db_read = path_to_db_read
+        self.path_to_db_write = path_to_db_write
         self.dim_observations = dim_observations
         self.dim_actions = dim_actions
         self.dim_one_sample = 2 * self.dim_observations + self.dim_actions + 2
-        self.buf = np.empty(shape=(maxlen,self.dim_one_sample) , dtype=np.float)
+        self.buf = np.empty(shape=(maxlen, self.dim_one_sample) , dtype=np.float)
 
-        if (self.write or self.read) and not self.path:
-            raise TypeError("You can not read or write data if not path to the database is defined.")
+        if self.write and not self.path_to_db_write:
+            raise TypeError("You can not write buffer data if not path to the database is defined.")
 
-        if (self.dim_observations is None or self.dim_actions is None) and self.read:
+        if (self.dim_observations is None or self.dim_actions is None) and self.path_to_db_read:
             raise TypeError("You can not read, if no dimensions for the observations and actions are specified.")
 
-        # check if the path to dir exists
-        if self.write and self.path and not os.path.isdir(self.path):
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), self.path)
+        # check if the db exists
+        self.path_to_db_read = os.path.join(self.path_to_db_read, "replay_buffer.db")
+        self.path_to_db_write = os.path.join(self.path_to_db_write, "replay_buffer.db")
+        if self.path_to_db_read and not os.path.exists(self.path_to_db_read):
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), self.path_to_db_read)
+        if self.write and self.path_to_db_write and not os.path.exists(self.path_to_db_write):
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), self.path_to_db_write)
+
+        # read data into the buffer if needed
+        if self.path_to_db_read:
+            self.read_buffer(n_samples=maxlen)
 
         # create connection to database and create if it does not exist yet
-        self.conn = sqlite3.connect(os.path.join(self.path, 'replay_buffer.db'))
+        self.conn = sqlite3.connect(self.path_to_db_write)
         self.c = self.conn.cursor()
 
         # create the table "data" of it does not exist
@@ -53,10 +61,12 @@ class ReplayBuffer(object):
         self.conn.commit()
 
     def __del__(self):
-        # save the buffer one last time
-        self.save()
+        # save the buffer one last time and close connection
+        self.save_buffer()
+        self.conn.close()
 
     def append(self, state, action, reward, next_state, done):
+        """ Appends the replay buffer with a single sample """
         data = np.concatenate((np.array(state), np.array(action), np.array([reward]), np.array(next_state), np.array([done])))
         self.buf[self.index] = data
         self.length = min(self.length + 1, self.maxlen)
@@ -64,9 +74,10 @@ class ReplayBuffer(object):
         self.number_of_samples_seen += 1
         # check if buffer needs to be saved
         if self.number_of_samples_seen % self.save_interval == 0:
-            self.save()
+            self.save_buffer()
 
     def sample(self, batch_size, with_replacement=True):
+        """ Samples a random batch of size batch_size from the replay buffer """
         if with_replacement:
             indices = np.random.randint(self.length, size=batch_size)  # faster
         else:
@@ -74,6 +85,7 @@ class ReplayBuffer(object):
         return self.buf[indices]
 
     def sample_batch(self, batch_size):
+        """ Splits a randomly sampled batch into states, actions, rewards, next_states and dones  """
         data = self.sample(batch_size)
         ind = 0
         states = data[:, ind:self.dim_observations]
@@ -87,8 +99,9 @@ class ReplayBuffer(object):
         dones = data[:, ind:(ind+1)]
         return states, actions, rewards.reshape(-1, 1), next_states, dones.reshape(-1, 1)
 
-    def save(self):
-        print("Saving replay buffer ...")
+    def save_buffer(self):
+        """ Saves all samples in the replay buffer, which were appended since last saving"""
+        print("\nSaving replay buffer ...")
         start = self.last_saved_at % self.maxlen
         end = self.number_of_samples_seen % self.maxlen
         if start > end:
@@ -101,7 +114,23 @@ class ReplayBuffer(object):
         self.last_saved_at = self.number_of_samples_seen
         print("Finished saving.")
 
+    def read_buffer(self, n_samples):
+        """ Returns the last n_samples samples from the reply buffer"""
+        print("\nReading Buffer from %s ..." % self.path_to_db_read)
+        connection = sqlite3.connect(self.path_to_db_read)
+        cursor = connection.cursor()
+        input_str = "SELECT * FROM (SELECT * FROM data ORDER BY oid DESC Limit %d) ORDER BY RANDOM()" %\
+                    min(n_samples, self.maxlen)
+        cursor.execute(input_str)
+        data = np.array(cursor.fetchall())
+        self.buf[0:data.shape[0], :] = data
+        self.length = data.shape[0]
+        self.index = self.length - 1
+        connection.close()
+        print("Finished reading buffer --> %d samples imported.\n" % self.length)
+
     def create_column_names(self):
+        """ Creates a string for defining the columns in a table of a sql database"""
         column_names = ""
         for var in range(self.dim_observations):
             column_names += "State_" + str(var) + " float,"
@@ -114,6 +143,7 @@ class ReplayBuffer(object):
         return column_names
 
     def create_input_str(self):
+        """ Creates a string for inserting the buffer data into a sql table"""
         dim_one_sample = 2 * self.dim_observations + self.dim_actions + 2
         input_str = "("
         for var in range(dim_one_sample - 1):

@@ -21,12 +21,15 @@ def eval_opts_args(argv):
     path_to_model = None
     training_episodes = None
     run_headless = False
+    read_buffer_id = None      # if id is set then the buffer with this id is going to be read to the buffer
+    write_buffer = False        # if True then buffer is written to root log dir
 
     try:
-        opts, args = getopt.getopt(argv, "l:i:m:e:twhn", ["log_dir=", "id=", "load_model=",
+        opts, args = getopt.getopt(argv, "l:i:m:e:r:twnhH", ["help","log_dir=", "id=", "load_model=",
                                                           "episodes=", "tensorboard", "save_weights",
-                                                          "no_training", "headless"])
-    except getopt.GetoptError:
+                                                          "no_training", "headless", "read_buffer=", "write_buffer"])
+    except getopt.GetoptError as e:
+        print("\n Error: ", e, "\n")
         print_help_message()
 
     for opt, arg in opts:
@@ -45,17 +48,18 @@ def eval_opts_args(argv):
             load_model_run_id = arg
         elif opt in ("-e", "--episodes"):
             training_episodes = int(arg)
-        elif opt in ("-h", "--headless"):
+        elif opt in ("-H", "--headless"):
             run_headless = True
-        elif opt == "--no_training":
+        elif opt in ("-n", "--no_training"):
             no_training = True
+        elif opt in ("-r", "--read_buffer"):
+            read_buffer_id = arg
+        elif opt in ("-w", "--write_buffer"):
+            write_buffer = True
 
-    if not root_log_dir and (save_weights or use_tensorboard):
-        print("You can not use tensorboard without providing a logging directory!")
-        print_help_message()
-    elif root_log_dir and not (save_weights and use_tensorboard) and not load_model_run_id:
-        print("You have set a logging path but neither tensorboard, saving_weights nor load_model are activated!")
-        print("Please activate at least one of them or don't set logging path.")
+    if not root_log_dir and ((save_weights or use_tensorboard or write_buffer) or read_buffer_id is not None):
+        print("You can not use tensorboard, save the weights, read/save the buffer or load a model without "
+              "providing a root logging directory!")
         print_help_message()
 
     # check if logging dir exists
@@ -81,6 +85,13 @@ def eval_opts_args(argv):
                 exit_not_found = True
             if exit_not_found:
                 sys.exit()
+    # check if there exists a directory of the buffer
+    path_to_read_buffer = None
+    if read_buffer_id:
+        path_to_read_buffer = os.path.join(root_log_dir, read_buffer_id, "")
+        if not os.path.exists(path_to_read_buffer):
+            raise FileNotFoundError("The given path to the read database's directory does not exists: %s" %
+                                    path_to_read_buffer)
 
     return {"root_dir": root_log_dir,
             "use_tensorboard": use_tensorboard,
@@ -89,7 +100,9 @@ def eval_opts_args(argv):
             "path_to_model": path_to_model,
             "training_episodes": training_episodes,
             "no_training": no_training,
-            "headless": run_headless}
+            "headless": run_headless,
+            "path_to_read_buffer": path_to_read_buffer,
+            "write_buffer": write_buffer}
 
 
 def print_help_message():
@@ -101,8 +114,10 @@ def print_help_message():
           "-t, --tensorboard                   If set, stores tensorboard logs at <logging_dir>\n"
           "-i, --id <id>                       Sets the run-id for logging to <id>\n"
           "-m, --load_model <model_location>   Sets the location of the model to be loaded \n"
-          "-h, --headless                      If set, runs Coppelia-simulator in headless-mode\n"
-          "-n, --no_training                   If set, does not train the models\n")
+          "-H, --headless                      If set, runs Coppelia-simulator in headless-mode\n"
+          "-n, --no_training                   If set, does not train the models\n"
+          "-r, --read_buffer <id_buffer>       Sets the id (former run-id) of the buffer to be read\n"
+          "-w, --write_buffer                  If set, the buffer is written to a sql database in the logging_dir")
     sys.exit()
 
 
