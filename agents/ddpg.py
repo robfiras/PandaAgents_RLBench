@@ -9,7 +9,6 @@ from agents.ddpg_backend.target_update_ops import update_target_variables
 from agents.ddpg_backend.replay_buffer import ReplayBuffer
 from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
-from agents.misc.opts_arg_evaluator import eval_opts_args
 from agents.base import Agent
 
 # tf.config.experimental_run_functions_eagerly(True)
@@ -116,7 +115,7 @@ class DDPG(Agent):
                  start_training=10,
                  save_weights_interval=400,
                  use_ou_noise=False,
-                 buffer_size=50000,
+                 buffer_size=500000,
                  lr_actor=0.0001,
                  lr_critic=0.001,
                  layers_actor=[400, 300],
@@ -140,22 +139,8 @@ class DDPG(Agent):
         :param layers_critic: number of units in each dense layer in the actor (len of list defines number of layers)
         """
 
-        # parse arguments
-        self.argv = argv
-        options = eval_opts_args(argv)
-        self.root_log_dir = options["root_dir"]
-        self.use_tensorboard = options["use_tensorboard"]
-        self.save_weights = options["save_weights"]
-        self.run_id = options["run_id"]
-        self.path_to_model = options["path_to_model"]
-        self.training_episodes = options["training_episodes"]
-        self.no_training = options["no_training"]
-        self.headless = options["headless"]
-        self.path_to_read_buffer = options["path_to_read_buffer"]
-        self.write_buffer = options["write_buffer"]
-
         # call parent constructor
-        super(DDPG, self).__init__(action_mode, task_class, obs_config, self.headless)
+        super(DDPG, self).__init__(action_mode, task_class, obs_config, argv)
 
         # define the dimensions
         self.dim_inputs_actor = self.dim_observations
@@ -169,7 +154,7 @@ class DDPG(Agent):
         self.episode_length = episode_length
         self.training_interval = training_interval
         self.start_training = start_training
-        self.global_step = 0
+        self.global_step_main = 0
         self.global_episode = 0
         self.use_ou_noise = use_ou_noise
 
@@ -193,7 +178,8 @@ class DDPG(Agent):
                                           path_to_db_read=self.path_to_read_buffer,
                                           dim_observations=self.dim_observations,
                                           dim_actions=self.dim_actions,
-                                          write=self.write_buffer)
+                                          write=self.write_buffer,
+                                          save_interval=50000)
 
         # --- define actor and its target---
         self.actor = ActorNetwork(layers_actor, self.dim_actions, sigma=sigma, use_ou_noise=use_ou_noise)
@@ -229,51 +215,106 @@ class DDPG(Agent):
         # setup the critic's optimizer
         self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=lr_critic)
 
+    def __del__(self):
+        # call parent destructor
+        super(DDPG, self).__del__()
+
     def run(self):
-        obs = None
+        obs = []
+        action = []
+        reward = []
+        next_obs = []
+        done = []
         number_of_succ_episodes = 0
-        logger = CmdLineLogger(10, self.training_episodes)
+        logger = CmdLineLogger(10, self.training_episodes, self.n_additional_workers)
         while self.global_episode < self.training_episodes:
             # reset episode if maximal length is reached or task is done
-            if self.global_step % self.episode_length == 0 or done:
-                descriptions, obs = self.task.reset()
-                obs = obs.get_low_dim_data()
-                self.global_episode += 1
+            if self.global_step_main % self.episode_length == 0:
+                # reset workers
+                if self.n_additional_workers > 0:
+                    for q in self.command_queue:
+                        q.put(("reset", ()))
+                descriptions, single_obs = self.task.reset()
+                obs.append(single_obs.get_low_dim_data())
+                # collect data from workers
+                if self.n_additional_workers > 0:
+                    for q in self.result_queue:
+                        descriptions, single_obs = q.get()
+                        obs.append(single_obs)
+                self.global_episode += (1 * (self.n_additional_workers+1))
                 logger(self.global_episode, number_of_succ_episodes)
 
-            # predict action with actor
-            action = self.get_action([obs], noise=(False if self.no_training else True))
+            # divide observations in main thread and workers
+            obs_main_thread = obs[0]
+            if self.n_additional_workers > 0:
+                obs_workers = obs[1:len(obs)]
 
-            # make a step
-            next_obs, reward, done = self.task.step(action)
-            next_obs = next_obs.get_low_dim_data()
+            # predict action with actor
+            action = self.get_action(obs, noise=(False if self.no_training else True))
+            action_main_thread = action[0]
+            if self.n_additional_workers > 0:
+                action_workers = action[1:len(action)]
+
+            # make a step in workers
+            if self.n_additional_workers > 0:
+                for q, a in zip(self.command_queue, action_workers):
+                    q.put(("step", (a,)))
+
+            # make a step in main thread
+            single_next_obs, single_reward, single_done = self.task.step(action_main_thread)
+            single_next_obs = single_next_obs.get_low_dim_data()
 
             # add experience to replay buffer
-            self.replay_buffer.append(obs, action, float(reward), next_obs, float(done))
+            self.replay_buffer.append(obs_main_thread, action_main_thread,
+                                      float(single_reward), single_next_obs, float(single_done))
+            next_obs.append(single_next_obs)
+            reward.append(single_reward)
+            done.append(single_done)
+
+            # collects results from workers
+            if self.n_additional_workers > 0:
+                for q, a, o in zip(self.result_queue, action_workers, obs_workers):
+                    single_next_obs, single_reward, single_done = q.get()
+                    self.replay_buffer.append(o, a, float(single_reward), single_next_obs, float(single_done))
+                    next_obs.append(single_next_obs)
+                    reward.append(single_reward)
+                    done.append(single_done)
 
             # train if conditions are met
-            cond_train = (self.global_step >= self.start_training and
-                          self.global_step % self.training_interval == 0 and
+            cond_train = (self.global_step_main >= self.start_training and
+                          self.global_step_main % self.training_interval == 0 and
                           not self.no_training)
             if cond_train:
                 crit_loss, act_loss = self.train()
 
             # save weights if needed
-            if self.save_weights and self.global_step % self.save_weights_interval == 0 and self.global_step > self.start_training:
+            if self.save_weights and self.global_step_main % self.save_weights_interval == 0 and self.global_step_main > self.start_training:
                 self.save_all_models()
 
             # log to tensorboard if needed
             if self.use_tensorboard and cond_train:
                 with self.summary_writer.as_default():
-                    tf.summary.scalar('Critic-Loss', crit_loss, step=self.global_step)
-                    tf.summary.scalar('Actor-Loss', act_loss, step=self.global_step)
-                    tf.summary.scalar('Reward', float(reward), step=self.global_step)
-                    tf.summary.scalar('Cumulated Reward', float(number_of_succ_episodes), step=self.global_step)
+                    # determine the total number of steps made in all threads
+                    total_steps = self.global_step_main * (1 + self.n_additional_workers)
+                    # pass logging data to tensorboard
+                    tf.summary.scalar('Critic-Loss', crit_loss, step=total_steps)
+                    tf.summary.scalar('Actor-Loss', act_loss, step=total_steps)
+                    scalar_reward = 0
+                    for r in reward:
+                        scalar_reward += r
+                    tf.summary.scalar('Reward', float(scalar_reward), step=total_steps)
+                    tf.summary.scalar('Number of successful Episodes', float(number_of_succ_episodes), step=total_steps)
+
+            for r in reward:
+                if r > 0.0:
+                    number_of_succ_episodes += 1
 
             # increment and save next_obs as obs
-            self.global_step += 1
+            self.global_step_main += 1
             obs = next_obs
-            number_of_succ_episodes += reward
+            next_obs = []
+            reward = []
+            done = []
 
         print('Done')
         self.env.shutdown()
@@ -294,6 +335,7 @@ class DDPG(Agent):
         actions = np.squeeze(actions)
         if scale:
             actions = self.scale_action(actions)
+
         return actions
 
     def scale_action(self, actions):

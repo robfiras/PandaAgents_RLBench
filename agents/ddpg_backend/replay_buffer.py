@@ -106,7 +106,7 @@ class ReplayBuffer(object):
         print("\nSaving replay buffer ...")
         start = self.last_saved_at % self.maxlen
         end = self.number_of_samples_seen % self.maxlen
-        if start > end:
+        if start >= end:
             start = start - end
             end = self.maxlen
         data = self.buf[start:end]
