@@ -4,6 +4,7 @@ import datetime
 
 import numpy as np
 import tensorflow as tf
+from rlbench.backend.observation import Observation
 
 from agents.ddpg_backend.target_update_ops import update_target_variables
 from agents.ddpg_backend.replay_buffer import ReplayBuffer
@@ -178,8 +179,7 @@ class DDPG(Agent):
                                           path_to_db_read=self.path_to_read_buffer,
                                           dim_observations=self.dim_observations,
                                           dim_actions=self.dim_actions,
-                                          write=self.write_buffer,
-                                          save_interval=50000)
+                                          write=self.write_buffer)
 
         # --- define actor and its target---
         self.actor = ActorNetwork(layers_actor, self.dim_actions, sigma=sigma, use_ou_noise=use_ou_noise)
@@ -262,6 +262,7 @@ class DDPG(Agent):
 
             # make a step in main thread
             single_next_obs, single_reward, single_done = self.task.step(action_main_thread)
+            single_reward = self.cal_custom_reward(single_next_obs)          # added custom reward
             single_next_obs = single_next_obs.get_low_dim_data()
 
             # add experience to replay buffer
@@ -275,6 +276,8 @@ class DDPG(Agent):
             if self.n_additional_workers > 0:
                 for q, a, o in zip(self.result_queue, action_workers, obs_workers):
                     single_next_obs, single_reward, single_done = q.get()
+                    single_reward = self.cal_custom_reward(single_next_obs)          # added custom reward
+                    single_next_obs = single_next_obs.get_low_dim_data()
                     self.replay_buffer.append(o, a, float(single_reward), single_next_obs, float(single_done))
                     next_obs.append(single_next_obs)
                     reward.append(single_reward)
@@ -316,8 +319,8 @@ class DDPG(Agent):
             reward = []
             done = []
 
-        print('Done')
-        self.env.shutdown()
+        self.clean_up()
+        print('\nDone.\n')
 
     def get_action(self, obs, noise=True, scale=True):
         """
@@ -350,6 +353,11 @@ class DDPG(Agent):
         actions[-1] = np.clip(0.5*actions[-1] + 0.5, 0, 1)
 
         return actions
+
+    def cal_custom_reward(self, obs: Observation):
+        gripper_pos = obs.gripper_pose[0:3]         # gripper x,y,z
+        target_pos = obs.task_low_dim_state         # target x,y,z
+        return np.sqrt(np.sum(np.square(np.subtract(target_pos, gripper_pos)), axis=0))     # euclidean norm
 
     def save_all_models(self):
         path_to_dir = os.path.join(self.root_log_dir, "weights", "")
@@ -417,3 +425,11 @@ class DDPG(Agent):
         update_target_variables(self.target_actor.weights, self.actor.weights, self.tau)
 
         return critic_loss, actor_loss
+
+    def clean_up(self):
+        # shut down all environments
+        [q.put(("kill", ())) for q in self.command_queue]
+        [worker.join() for worker in self.workers]
+        self.env.shutdown()
+        # delete replay buffer (this safes the replay buffer one last time)
+        del self.replay_buffer

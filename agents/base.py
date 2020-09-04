@@ -58,15 +58,6 @@ class Agent(object):
         self.dim_observations = np.shape(obs.get_low_dim_data())[0]    # TODO: find better way
         self.dim_actions = self.env.action_size
 
-    def __del__(self):
-        # kill all workers
-        [q.put(("kill", ())) for q in self.command_queue]
-        [worker.join() for worker in self.workers]
-
-        # shutdown env in main thread
-        self.env.shutdown()
-
-
     @property
     def only_low_dim_obs(self) -> bool:
         """ Returns true, if only low-dim obs are set """
@@ -134,7 +125,7 @@ class Agent(object):
             elif command_type == "step":
                 actions = command_args[0]
                 next_observation, reward, done = task.step(actions)
-                result_q.put((next_observation.get_low_dim_data(), reward, done))
+                result_q.put((next_observation, reward, done))
             elif command_type == "kill":
                 print("Killing worker %d" % worker_id)
                 env.shutdown()
