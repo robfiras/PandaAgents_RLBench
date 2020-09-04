@@ -64,7 +64,8 @@ class ReplayBuffer(object):
 
     def __del__(self):
         # save the buffer one last time and close connection
-        self.save_buffer()
+        if self.write:
+            self.save_buffer()
         self.conn.close()
 
     def append(self, state, action, reward, next_state, done):
