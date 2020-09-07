@@ -60,7 +60,7 @@ def eval_opts_args(argv):
         elif opt in ("-w", "--write_buffer"):
             write_buffer = True
         elif opt in ("-W", "--Worker"):
-            n_worker = int(arg)
+            n_worker = int(arg) - 1     # we always have at least one worker (our main thread)
 
     if not root_log_dir and ((save_weights or use_tensorboard or write_buffer) or read_buffer_id is not None):
         print("You can not use tensorboard, save the weights, read/save the buffer or load a model without "
