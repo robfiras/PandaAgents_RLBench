@@ -66,7 +66,7 @@ class ReplayBuffer(object):
         # save the buffer one last time and close connection
         if self.write:
             self.save_buffer()
-        self.conn.close()
+            self.conn.close()
 
     def append(self, state, action, reward, next_state, done):
         """ Appends the replay buffer with a single sample """

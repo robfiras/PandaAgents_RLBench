@@ -21,13 +21,16 @@ def eval_opts_args(argv):
     path_to_model = None
     training_episodes = None
     run_headless = False
-    read_buffer_id = None      # if id is set then the buffer with this id is going to be read to the buffer
-    write_buffer = False        # if True then buffer is written to root log dir
+    read_buffer_id = None
+    write_buffer = False
+    n_worker = 0
+
 
     try:
-        opts, args = getopt.getopt(argv, "l:i:m:e:r:twnhH", ["help","log_dir=", "id=", "load_model=",
-                                                          "episodes=", "tensorboard", "save_weights",
-                                                          "no_training", "headless", "read_buffer=", "write_buffer"])
+        opts, args = getopt.getopt(argv, "l:i:m:e:r:W:twnhH", ["help","log_dir=", "id=", "load_model=",
+                                                               "episodes=", "tensorboard", "save_weights",
+                                                               "no_training", "headless", "read_buffer=",
+                                                               "Worker=", "write_buffer"])
     except getopt.GetoptError as e:
         print("\n Error: ", e, "\n")
         print_help_message()
@@ -56,6 +59,8 @@ def eval_opts_args(argv):
             read_buffer_id = arg
         elif opt in ("-w", "--write_buffer"):
             write_buffer = True
+        elif opt in ("-W", "--Worker"):
+            n_worker = int(arg)
 
     if not root_log_dir and ((save_weights or use_tensorboard or write_buffer) or read_buffer_id is not None):
         print("You can not use tensorboard, save the weights, read/save the buffer or load a model without "
@@ -102,7 +107,8 @@ def eval_opts_args(argv):
             "no_training": no_training,
             "headless": run_headless,
             "path_to_read_buffer": path_to_read_buffer,
-            "write_buffer": write_buffer}
+            "write_buffer": write_buffer,
+            "n_worker": n_worker}
 
 
 def print_help_message():
@@ -117,7 +123,8 @@ def print_help_message():
           "-H, --headless                      If set, runs Coppelia-simulator in headless-mode\n"
           "-n, --no_training                   If set, does not train the models\n"
           "-r, --read_buffer <id_buffer>       Sets the id (former run-id) of the buffer to be read\n"
-          "-w, --write_buffer                  If set, the buffer is written to a sql database in the logging_dir")
+          "-w, --write_buffer                  If set, the buffer is written to a sql database in the logging_dir\n"
+          "-W, --Worker                        Sets the number of workers")
     sys.exit()
 
 

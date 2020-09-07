@@ -25,7 +25,7 @@ class Agent(object):
         self.no_training = options["no_training"]
         self.path_to_read_buffer = options["path_to_read_buffer"]
         self.write_buffer = options["write_buffer"]
-        self.n_additional_workers = 15  # Todo: add to argument parser
+        self.n_additional_workers = options["n_worker"]
         self.headless = options["headless"]
 
         self.action_mode = action_mode

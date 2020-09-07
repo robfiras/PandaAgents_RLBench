@@ -215,10 +215,6 @@ class DDPG(Agent):
         # setup the critic's optimizer
         self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=lr_critic)
 
-    def __del__(self):
-        # call parent destructor
-        super(DDPG, self).__del__()
-
     def run(self):
         obs = []
         action = []
@@ -353,12 +349,12 @@ class DDPG(Agent):
 
         # the gripper only accepts actions between 0 and 1 | clipping needed due to noise
         actions[-1] = np.clip(0.5*actions[-1] + 0.5, 0, 1)
-
         return actions
 
     def cal_custom_reward(self, obs: Observation):
         gripper_pos = obs.gripper_pose[0:3]         # gripper x,y,z
-        target_pos = obs.task_low_dim_state         # target x,y,z
+        #target_pos = obs.task_low_dim_state         # target x,y,z
+        target_pos = [0.4, 0.12, 0.823]
         return np.sqrt(np.sum(np.square(np.subtract(target_pos, gripper_pos)), axis=0))     # euclidean norm
 
     def save_all_models(self):
@@ -429,6 +425,7 @@ class DDPG(Agent):
         return critic_loss, actor_loss
 
     def clean_up(self):
+        print("Cleaning up ...")
         # shut down all environments
         [q.put(("kill", ())) for q in self.command_queue]
         [worker.join() for worker in self.workers]
