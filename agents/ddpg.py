@@ -355,7 +355,7 @@ class DDPG(Agent):
         gripper_pos = obs.gripper_pose[0:3]         # gripper x,y,z
         #target_pos = obs.task_low_dim_state         # target x,y,z
         target_pos = [0.4, 0.12, 0.823]
-        return np.sqrt(np.sum(np.square(np.subtract(target_pos, gripper_pos)), axis=0))     # euclidean norm
+        return 1/(np.sqrt(np.sum(np.square(np.subtract(target_pos, gripper_pos)), axis=0)) + 0.00001)    # euclidean norm
 
     def save_all_models(self):
         path_to_dir = os.path.join(self.root_log_dir, "weights", "")
