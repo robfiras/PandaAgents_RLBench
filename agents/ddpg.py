@@ -235,7 +235,7 @@ class DDPG(Agent):
                     for q in self.command_queue:
                         q.put(("reset", ()))
                 descriptions, single_obs = self.task.reset()
-                obs.append(single_obs.get_low_dim_data())
+                obs = [single_obs.get_low_dim_data()]
                 # collect data from workers
                 if self.n_additional_workers > 0:
                     for q in self.result_queue:
@@ -251,9 +251,11 @@ class DDPG(Agent):
 
             # predict action with actor
             action = self.get_action(obs, noise=(False if self.no_training else True))
-            action_main_thread = action[0]
             if self.n_additional_workers > 0:
                 action_workers = action[1:len(action)]
+                action_main_thread = action[0]
+            else:
+                action_main_thread = action
 
             # make a step in workers
             if self.n_additional_workers > 0:
