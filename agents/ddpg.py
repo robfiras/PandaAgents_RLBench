@@ -226,12 +226,12 @@ class DDPG(Agent):
         while self.global_episode < self.training_episodes:
             # reset episode if maximal length is reached or task is done
             if self.global_step_main % self.episode_length == 0:
+                descriptions, single_obs = self.task.reset()
+                obs = [single_obs.get_low_dim_data()]
                 # reset workers
                 if self.n_additional_workers > 0:
                     for q in self.command_queue:
                         q.put(("reset", ()))
-                descriptions, single_obs = self.task.reset()
-                obs = [single_obs.get_low_dim_data()]
                 # collect data from workers
                 if self.n_additional_workers > 0:
                     for q in self.result_queue:
