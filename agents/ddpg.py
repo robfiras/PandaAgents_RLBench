@@ -273,13 +273,16 @@ class DDPG(Agent):
             # collects results from workers
             if self.n_additional_workers > 0:
                 for q, a, o in zip(self.result_queue, action_workers, obs_workers):
-                    single_next_obs, single_reward, single_done = q.get()
-                    single_reward = self.cal_custom_reward(single_next_obs)          # added custom reward
-                    single_next_obs = single_next_obs.get_low_dim_data()
-                    self.replay_buffer.append(o, a, float(single_reward), single_next_obs, float(single_done))
-                    next_obs.append(single_next_obs)
-                    reward.append(single_reward)
-                    done.append(single_done)
+                    return_worker = q.get()
+                    # add to replay buffer if valid (episode might be already over)
+                    if return_worker:
+                        single_next_obs, single_reward, single_done = return_worker
+                        single_reward = self.cal_custom_reward(single_next_obs)          # added custom reward
+                        single_next_obs = single_next_obs.get_low_dim_data()
+                        self.replay_buffer.append(o, a, float(single_reward), single_next_obs, float(single_done))
+                        next_obs.append(single_next_obs)
+                        reward.append(single_reward)
+                        done.append(single_done)
 
             # train if conditions are met
             cond_train = (self.global_step_main >= self.start_training and

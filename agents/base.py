@@ -113,19 +113,26 @@ class Agent(object):
         env.launch()
         task = env.get_task(task_class)
         task.reset()
+        wait_for_reset = False
         print("Initialized worker %d" % worker_id)
         while True:
-            #if not command_q.empty():
             command = command_q.get()
             command_type = command[0]
             command_args = command[1]
             if command_type == "reset":
                 descriptions, observation = task.reset()
                 result_q.put((descriptions, observation.get_low_dim_data()))
+                wait_for_reset = False
             elif command_type == "step":
                 actions = command_args[0]
-                next_observation, reward, done = task.step(actions)
-                result_q.put((next_observation, reward, done))
+                if not wait_for_reset:
+                    next_observation, reward, done = task.step(actions)
+                    result_q.put((next_observation, reward, done))
+                    if done:
+                        wait_for_reset = True
+                else:
+                    # wait until reset | we need to put something into the queue since the main process would not go on
+                    result_q.put(None)
             elif command_type == "kill":
                 print("Killing worker %d" % worker_id)
                 env.shutdown()
