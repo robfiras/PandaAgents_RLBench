@@ -25,8 +25,14 @@ class Agent(object):
         self.no_training = options["no_training"]
         self.path_to_read_buffer = options["path_to_read_buffer"]
         self.write_buffer = options["write_buffer"]
-        self.n_additional_workers = options["n_worker"]
+        self.n_workers = options["n_worker"]
         self.headless = options["headless"]
+
+        # non-headless mode only allowed, if one worker is set.
+        if self.n_workers == 1 and not self.headless:
+            self.headless = False
+        else:
+            self.headless = True
 
         self.action_mode = action_mode
         self.task_class = task_class
@@ -39,20 +45,21 @@ class Agent(object):
         self.workers = []
         self.command_queue = []
         self.result_queue = []
-        if self.n_additional_workers > 0:
-            self.run_workers(self.n_additional_workers)
+        self.run_workers(self.n_workers, self.headless)
+        self.worker_conn = [{"command_queue": cq,
+                             "result_queue": rq,
+                             "index": idx} for cq, rq, idx in zip(self.command_queue,
+                                                                  self.result_queue,
+                                                                  range(self.n_workers))]
 
-        # mur main thread is always running an environment as well
+        # main thread is always running an environment as well for configuration
         self.env = Environment(action_mode=self.action_mode,
                                obs_config=self.obs_config,
-                               headless=self.headless)
+                               headless=True)
 
         self.env.launch()
         self.task = self.env.get_task(self.task_class)
-
-        print('Initializing Episode')
         descriptions, obs = self.task.reset()
-        print(descriptions)
 
         # determine dimensions
         self.dim_observations = np.shape(obs.get_low_dim_data())[0]    # TODO: find better way
@@ -92,7 +99,7 @@ class Agent(object):
         else:
             return False
 
-    def run_workers(self, n_workers):
+    def run_workers(self, n_workers, headless):
         self.command_queue = [mp.Queue()] * n_workers
         self.result_queue = [mp.Queue()] * n_workers
         self.workers = [mp.Process(target=self.job_worker,
@@ -101,19 +108,21 @@ class Agent(object):
                                          self.obs_config,
                                          self.task_class,
                                          self.command_queue[worker_id],
-                                         self.result_queue[worker_id])) for worker_id in range(n_workers)]
+                                         self.result_queue[worker_id],
+                                         headless),) for worker_id in range(n_workers)]
         for worker in self.workers:
             worker.start()
 
     def job_worker(self, worker_id, action_mode,
-                    obs_config, task_class,
-                    command_q: mp.Queue,
-                    result_q: mp.Queue):
-        env = Environment(action_mode=action_mode, obs_config=obs_config, headless=True)
+                   obs_config, task_class,
+                   command_q: mp.Queue,
+                   result_q: mp.Queue,
+                   headless):
+
+        env = Environment(action_mode=action_mode, obs_config=obs_config, headless=headless)
         env.launch()
         task = env.get_task(task_class)
         task.reset()
-        wait_for_reset = False
         print("Initialized worker %d" % worker_id)
         while True:
             command = command_q.get()
@@ -122,17 +131,10 @@ class Agent(object):
             if command_type == "reset":
                 descriptions, observation = task.reset()
                 result_q.put((descriptions, observation.get_low_dim_data()))
-                wait_for_reset = False
             elif command_type == "step":
                 actions = command_args[0]
-                if not wait_for_reset:
-                    next_observation, reward, done = task.step(actions)
-                    result_q.put((next_observation, reward, done))
-                    if done:
-                        wait_for_reset = True
-                else:
-                    # wait until reset | we need to put something into the queue since the main process would not go on
-                    result_q.put(None)
+                next_observation, reward, done = task.step(actions)
+                result_q.put((next_observation, reward, done))
             elif command_type == "kill":
                 print("Killing worker %d" % worker_id)
                 env.shutdown()

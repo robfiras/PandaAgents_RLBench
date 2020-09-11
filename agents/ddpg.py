@@ -12,15 +12,17 @@ from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
 from agents.base import Agent
 
-# tf.config.experimental_run_functions_eagerly(True)
+#tf.config.run_functions_eagerly(True)
 tf.keras.backend.set_floatx('float64')
 
 
 class ActorNetwork(tf.keras.Model):
 
-    def __init__(self, units_hidden_layers, dim_actions, activations=None, sigma=0.1, mu=0.0, use_ou_noise=False):
+    def __init__(self, units_hidden_layers, dim_actions, max_action, activations=None, sigma=0.1, mu=0.0, use_ou_noise=False):
         # call the parent constructor
         super(ActorNetwork, self).__init__()
+
+        self.dim_actions = dim_actions
 
         # check if default activations should be used (relus)
         if not activations:
@@ -29,7 +31,10 @@ class ActorNetwork(tf.keras.Model):
         # define the layers that are going to be used in our actor
         self.hidden_layers = [tf.keras.layers.Dense(dim, activation=activation)
                               for dim, activation in zip(units_hidden_layers, activations)]
-        self.out = tf.keras.layers.Dense(dim_actions, activation="tanh")
+        self.out = tf.keras.layers.Dense(dim_actions)
+
+        # set action scaling
+        self.max_actions = tf.constant([max_action], dtype=tf.float64)
 
         # setup the noise for the actor
         self.sigma = sigma
@@ -44,7 +49,17 @@ class ActorNetwork(tf.keras.Model):
         z = inputs
         for layer in self.hidden_layers:
             z = layer(z)
-        return self.out(z)
+        # we need to scale actions
+        arm_actions, gripper_action = tf.split(self.out(z), [7, 1], axis=1)
+        arm_actions = tf.nn.tanh(arm_actions)           # we want arm actions to be between -1 and 1
+        gripper_action = tf.nn.sigmoid(gripper_action)  # we want gripper actions to be between 0 and 1
+
+        # scale arm actions
+        batch_size = tf.shape(arm_actions)[0]
+        scale = tf.tile(self.max_actions, [batch_size, 1])
+        arm_actions = tf.multiply(arm_actions, scale)
+
+        return tf.concat([arm_actions, gripper_action], axis=1)
 
     def noisy_predict(self, obs, return_tensor=False):
         """
@@ -109,7 +124,7 @@ class DDPG(Agent):
                  task_class,
                  gamma=0.9,
                  tau=0.001,
-                 sigma=0.1,
+                 sigma=0.05,
                  batch_size=32,
                  episode_length=40,
                  training_interval=1,
@@ -182,8 +197,9 @@ class DDPG(Agent):
                                           write=self.write_buffer)
 
         # --- define actor and its target---
-        self.actor = ActorNetwork(layers_actor, self.dim_actions, sigma=sigma, use_ou_noise=use_ou_noise)
-        self.target_actor = ActorNetwork(layers_actor,  self.dim_actions, sigma=sigma, use_ou_noise=use_ou_noise)
+        self.max_actions = self.task.get_joint_upper_velocity_limits()
+        self.actor = ActorNetwork(layers_actor, self.dim_actions, self.max_actions, sigma=sigma, use_ou_noise=use_ou_noise)
+        self.target_actor = ActorNetwork(layers_actor,  self.dim_actions, self.max_actions, sigma=sigma, use_ou_noise=use_ou_noise)
         # instantiate the models (if we do not instantiate the model, we can not copy their weights)
         self.actor.build((1, self.dim_inputs_actor))
         self.target_actor.build((1, self.dim_inputs_actor))
@@ -221,68 +237,27 @@ class DDPG(Agent):
         reward = []
         next_obs = []
         done = []
+        running_workers = []
         number_of_succ_episodes = 0
-        logger = CmdLineLogger(10, self.training_episodes, self.n_additional_workers)
+        logger = CmdLineLogger(10, self.training_episodes, self.n_workers)
         while self.global_episode < self.training_episodes:
-            # reset episode if maximal length is reached or task is done
-            if self.global_step_main % self.episode_length == 0:
-                descriptions, single_obs = self.task.reset()
-                obs = [single_obs.get_low_dim_data()]
+            # reset episode if maximal length is reached or all worker are done
+            if self.global_step_main % self.episode_length == 0 or not running_workers:
+                obs = []
+                # init a list of worker (connections) which haven't finished their episodes yet -> all at reset
+                running_workers = self.worker_conn.copy()
                 # reset workers
-                if self.n_additional_workers > 0:
-                    for q in self.command_queue:
-                        q.put(("reset", ()))
-                # collect data from workers
-                if self.n_additional_workers > 0:
-                    for q in self.result_queue:
-                        descriptions, single_obs = q.get()
-                        obs.append(single_obs)
-                self.global_episode += (1 * (self.n_additional_workers+1))
-                logger(self.global_episode, number_of_succ_episodes)
+                self.all_worker_reset(running_workers, obs)
 
-            # divide observations in main thread and workers
-            obs_main_thread = obs[0]
-            if self.n_additional_workers > 0:
-                obs_workers = obs[1:len(obs)]
+                self.global_episode += self.n_workers
+                logger(self.global_episode, number_of_succ_episodes)
 
             # predict action with actor
             action = self.get_action(obs, noise=(False if self.no_training else True))
-            if self.n_additional_workers > 0:
-                action_workers = action[1:len(action)]
-                action_main_thread = action[0]
-            else:
-                action_main_thread = action
 
             # make a step in workers
-            if self.n_additional_workers > 0:
-                for q, a in zip(self.command_queue, action_workers):
-                    q.put(("step", (a,)))
-
-            # make a step in main thread
-            single_next_obs, single_reward, single_done = self.task.step(action_main_thread)
-            single_reward = self.cal_custom_reward(single_next_obs)          # added custom reward
-            single_next_obs = single_next_obs.get_low_dim_data()
-
-            # add experience to replay buffer
-            self.replay_buffer.append(obs_main_thread, action_main_thread,
-                                      float(single_reward), single_next_obs, float(single_done))
-            next_obs.append(single_next_obs)
-            reward.append(single_reward)
-            done.append(single_done)
-
-            # collects results from workers
-            if self.n_additional_workers > 0:
-                for q, a, o in zip(self.result_queue, action_workers, obs_workers):
-                    return_worker = q.get()
-                    # add to replay buffer if valid (episode might be already over)
-                    if return_worker:
-                        single_next_obs, single_reward, single_done = return_worker
-                        single_reward = self.cal_custom_reward(single_next_obs)          # added custom reward
-                        single_next_obs = single_next_obs.get_low_dim_data()
-                        self.replay_buffer.append(o, a, float(single_reward), single_next_obs, float(single_done))
-                        next_obs.append(single_next_obs)
-                        reward.append(single_reward)
-                        done.append(single_done)
+            self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
+                                 done=done, running_workers=running_workers)
 
             # train if conditions are met
             cond_train = (self.global_step_main >= self.start_training and
@@ -299,7 +274,7 @@ class DDPG(Agent):
             if self.use_tensorboard and cond_train:
                 with self.summary_writer.as_default():
                     # determine the total number of steps made in all threads
-                    total_steps = self.global_step_main * (1 + self.n_additional_workers)
+                    total_steps = self.global_step_main * (1 + self.n_workers)
                     # pass logging data to tensorboard
                     tf.summary.scalar('Critic-Loss', crit_loss, step=total_steps)
                     tf.summary.scalar('Actor-Loss', act_loss, step=total_steps)
@@ -323,35 +298,49 @@ class DDPG(Agent):
         self.clean_up()
         print('\nDone.\n')
 
-    def get_action(self, obs, noise=True, scale=True):
+    def all_worker_reset(self, running_workers, obs):
+        # queue command to worker
+        for w in running_workers:
+            w["command_queue"].put(("reset", ()))
+        # collect data from workers
+        for w in running_workers:
+            descriptions, single_obs = w["result_queue"].get()
+            obs.append(single_obs)
+
+    def all_worker_step(self, obs, action, reward, next_obs, done, running_workers):
+        for w, a in zip(running_workers, action):
+            w["command_queue"].put(("step", (a,)))
+
+        # collect results from workers
+        finished_workers = []
+        for w, o, a in zip(running_workers, obs, action):
+            single_next_obs, single_reward, single_done = w["result_queue"].get()
+            single_reward = self.cal_custom_reward(single_next_obs)  # added custom reward
+            single_next_obs = single_next_obs.get_low_dim_data()
+            self.replay_buffer.append(o, a, float(single_reward), single_next_obs, float(single_done))
+            if single_done:
+                # remove worker from running_workers if finished
+                finished_workers.append(w)
+            else:
+                next_obs.append(single_next_obs)
+                reward.append(single_reward)
+                done.append(single_done)
+
+        for w in finished_workers:
+            running_workers.remove(w)
+
+    def get_action(self, obs, noise=True):
         """
         Predicts an action using the actor network. DO NOT USE WHILE TRAINING. Use predict() or noisy_predict() instead
         :param obs: received observation
         :param noise: if true adds noise to actions tensor
-        :param scale: if true scales actions | ONLY FOR ACTION_MODE ABS_JOINT_VELOCITY
         :return: returns an numpy array containing the corresponding actions
         """
         if noise:
             actions = self.actor.noisy_predict(tf.constant(obs))
         else:
             actions = self.actor.predict(tf.constant(obs))
-        # squeeze since only one obs was given
-        actions = np.squeeze(actions)
-        if scale:
-            actions = self.scale_action(actions)
 
-        return actions
-
-    def scale_action(self, actions):
-        # in rad/s
-        max_vel_joints = self.task.get_joint_upper_velocity_limits()
-        max_vel_joints.append(1.0)  # add scaling for gripper (no scaling, action is discretized anyway)
-        max_vel_joints = np.array(max_vel_joints)
-        # action are between -1 and 1, so scaling is done by multiplication
-        actions = actions * max_vel_joints
-
-        # the gripper only accepts actions between 0 and 1 | clipping needed due to noise
-        actions[-1] = np.clip(0.5*actions[-1] + 0.5, 0, 1)
         return actions
 
     def cal_custom_reward(self, obs: Observation):

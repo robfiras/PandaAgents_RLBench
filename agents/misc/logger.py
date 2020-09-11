@@ -3,12 +3,12 @@ import datetime
 
 
 class CmdLineLogger:
-    def __init__(self, logging_interval, training_episodes, n_additional_workers=0, normalization=50):
-        if logging_interval < (1+n_additional_workers):
-            self.logging_interval = (1+n_additional_workers)
+    def __init__(self, logging_interval, training_episodes, n_workers, normalization=50):
+        if logging_interval < n_workers:
+            self.logging_interval = n_workers
             print("\nLengthening the logging interval from %d to %d.\n" % (logging_interval, self.logging_interval))
-        elif logging_interval % (1+n_additional_workers) != 0:
-            self.logging_interval = logging_interval - (logging_interval % (1+n_additional_workers))
+        elif logging_interval % n_workers != 0:
+            self.logging_interval = logging_interval - (logging_interval % n_workers)
             print("\nShortening the logging interval from %d to %d.\n" % (logging_interval, self.logging_interval))
         else:
             self.logging_interval = logging_interval
