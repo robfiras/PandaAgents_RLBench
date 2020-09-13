@@ -30,8 +30,8 @@ class ReplayBuffer(object):
         self.path_to_db_write = path_to_db_write
         self.dim_observations = dim_observations
         self.dim_actions = dim_actions
-        self.dim_one_sample = 2 * self.dim_observations + self.dim_actions + 2
-        self.buf = np.empty(shape=(maxlen, self.dim_one_sample) , dtype=np.float)
+        self.dim_one_sample = 2 * self.dim_observations + self.dim_actions + 4
+        self.buf = np.empty(shape=(maxlen, self.dim_one_sample), dtype=np.float)
 
         if self.write and not self.path_to_db_write:
             raise TypeError("You can not write buffer data if not path to the database is defined.")
@@ -68,9 +68,10 @@ class ReplayBuffer(object):
             self.save_buffer()
             self.conn.close()
 
-    def append(self, state, action, reward, next_state, done):
+    def append(self, state, action, reward, next_state, done, idx_episode):
         """ Appends the replay buffer with a single sample """
-        data = np.concatenate((np.array(state), np.array(action), np.array([reward]), np.array(next_state), np.array([done])))
+        data = np.concatenate((np.array([self.number_of_samples_seen]), np.array([idx_episode]), np.array(state),
+                               np.array(action), np.array([reward]), np.array(next_state), np.array([done])))
         self.buf[self.index] = data
         self.length = min(self.length + 1, self.maxlen)
         self.index = (self.index + 1) % self.maxlen
@@ -90,8 +91,8 @@ class ReplayBuffer(object):
     def sample_batch(self, batch_size):
         """ Splits a randomly sampled batch into states, actions, rewards, next_states and dones  """
         data = self.sample(batch_size)
-        ind = 0
-        states = data[:, ind:self.dim_observations]
+        ind = 2     # first entry is sample_id and second is episode_id
+        states = data[:, ind:(self.dim_observations+ind)]
         ind += self.dim_observations
         actions = data[:, ind:(ind+self.dim_actions)]
         ind += self.dim_actions
@@ -134,7 +135,8 @@ class ReplayBuffer(object):
 
     def create_column_names(self):
         """ Creates a string for defining the columns in a table of a sql database"""
-        column_names = ""
+        column_names = "Sample_ID int,"
+        column_names += "Episode_ID int,"
         for var in range(self.dim_observations):
             column_names += "State_" + str(var) + " float,"
         for var in range(self.dim_actions):
@@ -147,9 +149,8 @@ class ReplayBuffer(object):
 
     def create_input_str(self):
         """ Creates a string for inserting the buffer data into a sql table"""
-        dim_one_sample = 2 * self.dim_observations + self.dim_actions + 2
         input_str = "("
-        for var in range(dim_one_sample - 1):
+        for var in range(self.dim_one_sample - 1):
             input_str += "?,"
         input_str += "?)"
         return input_str

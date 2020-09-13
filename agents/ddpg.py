@@ -124,7 +124,7 @@ class DDPG(Agent):
                  task_class,
                  gamma=0.9,
                  tau=0.001,
-                 sigma=0.05,
+                 sigma=0.2,
                  batch_size=32,
                  episode_length=40,
                  training_interval=1,
@@ -249,7 +249,9 @@ class DDPG(Agent):
                 # reset workers
                 self.all_worker_reset(running_workers, obs)
 
-                self.global_episode += self.n_workers
+                if self.global_step_main != 0:
+                    self.global_episode += self.n_workers
+
                 logger(self.global_episode, number_of_succ_episodes)
 
             # predict action with actor
@@ -313,18 +315,18 @@ class DDPG(Agent):
 
         # collect results from workers
         finished_workers = []
-        for w, o, a in zip(running_workers, obs, action):
+        for w, o, a, e in zip(running_workers, obs, action, range(self.n_workers)):
             single_next_obs, single_reward, single_done = w["result_queue"].get()
-            single_reward = self.cal_custom_reward(single_next_obs)  # added custom reward
+            # single_reward = self.cal_custom_reward(single_next_obs)  # added custom reward
             single_next_obs = single_next_obs.get_low_dim_data()
-            self.replay_buffer.append(o, a, float(single_reward), single_next_obs, float(single_done))
+            self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
+                                      float(single_done), (e+self.global_episode))
+            next_obs.append(single_next_obs)
+            reward.append(single_reward)
+            done.append(single_done)
             if single_done:
                 # remove worker from running_workers if finished
                 finished_workers.append(w)
-            else:
-                next_obs.append(single_next_obs)
-                reward.append(single_reward)
-                done.append(single_done)
 
         for w in finished_workers:
             running_workers.remove(w)
