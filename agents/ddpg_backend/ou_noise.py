@@ -11,13 +11,14 @@ import tensorflow as tf
 
 class OUNoise:
     """ Creates temporally correlated Ornstein-Uhlenbeck noise"""
-    def __init__(self,  n_actions, mu=0.0, theta=0.15, sigma=0.2):
+    def __init__(self,  n_actions, mu=0.0, theta=0.15, sigma=0.2, seed=94):
         self.n_actions = n_actions
         self.mu = tf.constant(mu)
         self.theta = tf.constant(theta)
         self.sigma = tf.constant(sigma)
         self.state = tf.Variable(tf.ones(self.n_actions) * self.mu)
         self.reset()
+        self.seed = seed
 
     def reset(self):
         self.state = tf.Variable(tf.ones(self.n_actions) * self.mu)
@@ -34,7 +35,7 @@ class OUNoise:
         def noise_inner():
             for samples in tf.range(n_samples):
                 x = self.state
-                dx = self.theta * (self.mu - x) + self.sigma * tf.random.normal([self.n_actions])
+                dx = self.theta * (self.mu - x) + self.sigma * tf.random.normal([self.n_actions], seed=self.seed)
                 self.state.assign(self.state + dx)
                 ou_noise[samples].assign(self.state)
             return ou_noise

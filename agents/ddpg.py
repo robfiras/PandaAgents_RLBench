@@ -18,7 +18,8 @@ tf.keras.backend.set_floatx('float64')
 
 class ActorNetwork(tf.keras.Model):
 
-    def __init__(self, units_hidden_layers, dim_actions, max_action, activations=None, sigma=0.1, mu=0.0, use_ou_noise=False):
+    def __init__(self, units_hidden_layers, dim_actions, max_action, activations=None,
+                 sigma=0.1, mu=0.0, use_ou_noise=False, seed=94):
         # call the parent constructor
         super(ActorNetwork, self).__init__()
 
@@ -28,10 +29,15 @@ class ActorNetwork(tf.keras.Model):
         if not activations:
             activations = ["relu"] * len(units_hidden_layers)
 
+        self.seed = seed
+        glorot_init = tf.keras.initializers.GlorotUniform(seed=self.seed)
+        uniform_init = tf.keras.initializers.RandomUniform(minval=-0.003, maxval=0.003)
+
         # define the layers that are going to be used in our actor
-        self.hidden_layers = [tf.keras.layers.Dense(dim, activation=activation)
+        self.hidden_layers = [tf.keras.layers.Dense(dim, activation=activation, kernel_initializer=glorot_init,
+                                                    bias_initializer=glorot_init)
                               for dim, activation in zip(units_hidden_layers, activations)]
-        self.out = tf.keras.layers.Dense(dim_actions)
+        self.out = tf.keras.layers.Dense(dim_actions, kernel_initializer=uniform_init, bias_initializer=uniform_init)
 
         # set action scaling
         self.max_actions = tf.constant([max_action], dtype=tf.float64)
@@ -42,7 +48,7 @@ class ActorNetwork(tf.keras.Model):
         # check if ou noise should be used
         self.use_ou_noise = use_ou_noise
         if self.use_ou_noise:
-            self.ou_noise = OUNoise(dim_actions, mu=self.mu, sigma=self.sigma)
+            self.ou_noise = OUNoise(dim_actions, mu=self.mu, sigma=self.sigma, seed=self.seed)
 
     def call(self, inputs):
         # define the forward pass
@@ -82,7 +88,7 @@ class ActorNetwork(tf.keras.Model):
     def add_gaussian_noise(self, predictions):
         """ adds noise from a normal (Gaussian) distribution """
         noisy_predictions = predictions + tf.random.normal(shape=predictions.shape, mean=self.mu, stddev=self.sigma,
-                                                           dtype=tf.float32)
+                                                           dtype=tf.float32, seed=self.seed)
         return noisy_predictions
 
     def add_ou_noise(self, predictions):
@@ -93,7 +99,7 @@ class ActorNetwork(tf.keras.Model):
 
 class CriticNetwork(tf.keras.Model):
 
-    def __init__(self, units_hidden_layers, dim_obs,  dim_outputs, activations=None):
+    def __init__(self, units_hidden_layers, dim_obs,  dim_outputs, activations=None, seed=94):
         # call the parent constructor
         super(CriticNetwork, self).__init__()
 
@@ -103,10 +109,15 @@ class CriticNetwork(tf.keras.Model):
         if not activations:
             activations = ["relu"] * len(units_hidden_layers)
 
+        self.seed = seed
+        glorot_init = tf.keras.initializers.GlorotUniform(seed=self.seed)
+        uniform_init = tf.keras.initializers.RandomUniform(minval=-0.0003, maxval=0.0003)
+
         # define the layers that are going to be used in our critic
-        self.hidden_layers = [tf.keras.layers.Dense(dim, activation=activation)
+        self.hidden_layers = [tf.keras.layers.Dense(dim, activation=activation, kernel_initializer=glorot_init,
+                                                    bias_initializer=glorot_init)
                               for dim, activation in zip(units_hidden_layers, activations)]
-        self.out = tf.keras.layers.Dense(dim_outputs)
+        self.out = tf.keras.layers.Dense(dim_outputs, kernel_initializer=uniform_init, bias_initializer=uniform_init)
 
     def call(self, inputs):
         # define the forward pass
@@ -136,6 +147,7 @@ class DDPG(Agent):
                  lr_critic=0.001,
                  layers_actor=[400, 300],
                  layers_critic=[400, 300],
+                 seed=94
                  ):
         """
         :param obs_config: configuration of the observation
@@ -156,7 +168,7 @@ class DDPG(Agent):
         """
 
         # call parent constructor
-        super(DDPG, self).__init__(action_mode, task_class, obs_config, argv)
+        super(DDPG, self).__init__(action_mode, task_class, obs_config, argv, seed)
 
         # define the dimensions
         self.dim_inputs_actor = self.dim_observations
@@ -262,12 +274,14 @@ class DDPG(Agent):
                                  done=done, running_workers=running_workers)
 
             # train if conditions are met
-            cond_train = ((self.global_step_main * (1 + self.n_workers)) >= self.start_training and
+            total_steps = self.global_step_main * (1 + self.n_workers)
+            cond_train = (total_steps >= self.start_training and
                           self.global_step_main % self.training_interval == 0 and
                           not self.no_training)
 
             if cond_train:
-                avg_crit_loss, avg_act_loss = 0
+                avg_crit_loss = 0
+                avg_act_loss = 0
                 for i in range(self.n_workers):
                     crit_loss, act_loss = self.train()
                     avg_crit_loss += crit_loss
@@ -276,14 +290,12 @@ class DDPG(Agent):
                 avg_act_loss = avg_act_loss / self.n_workers
 
             # save weights if needed
-            if self.save_weights and self.global_step_main % self.save_weights_interval == 0 and self.global_step_main > self.start_training:
+            if self.save_weights and total_steps % self.save_weights_interval == 0 and total_steps > self.start_training:
                 self.save_all_models()
 
             # log to tensorboard if needed
             if self.use_tensorboard and cond_train:
                 with self.summary_writer.as_default():
-                    # determine the total number of steps made in all threads
-                    total_steps = self.global_step_main * (1 + self.n_workers)
                     # pass logging data to tensorboard
                     tf.summary.scalar('Critic-Loss', avg_crit_loss_loss, step=total_steps)
                     tf.summary.scalar('Actor-Loss', avg_act_loss, step=total_steps)

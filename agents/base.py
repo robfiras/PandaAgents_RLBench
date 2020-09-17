@@ -13,7 +13,7 @@ from agents.misc.opts_arg_evaluator import eval_opts_args
 
 class Agent(object):
 
-    def __init__(self, action_mode: ActionMode, task_class, obs_config: ObservationConfig, argv):
+    def __init__(self, action_mode: ActionMode, task_class, obs_config: ObservationConfig, argv, seed=94):
 
         # parse arguments
         self.argv = argv
@@ -39,6 +39,8 @@ class Agent(object):
         self.action_mode = action_mode
         self.task_class = task_class
         self.obs_config = obs_config
+
+        self.seed = seed
 
         if not self.only_low_dim_obs:
             raise ValueError("High-dim observations currently not supported!")
@@ -121,7 +123,7 @@ class Agent(object):
                    result_q: mp.Queue,
                    headless):
 
-        env = DomainRandomizationEnvironment(action_mode=action_mode, obs_config=obs_config, headless=headless)
+        env = Environment(action_mode=action_mode, obs_config=obs_config, headless=headless)
         env.launch()
         task = env.get_task(task_class)
         task.reset()
