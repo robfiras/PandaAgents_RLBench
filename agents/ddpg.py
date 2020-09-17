@@ -122,13 +122,13 @@ class DDPG(Agent):
                  action_mode,
                  obs_config,
                  task_class,
-                 gamma=0.9,
+                 gamma=0.99,
                  tau=0.001,
-                 sigma=0.2,
-                 batch_size=32,
+                 sigma=0.4,
+                 batch_size=64,
                  episode_length=40,
                  training_interval=1,
-                 start_training=10,
+                 start_training=500000,
                  save_weights_interval=400,
                  use_ou_noise=False,
                  buffer_size=500000,
@@ -262,11 +262,18 @@ class DDPG(Agent):
                                  done=done, running_workers=running_workers)
 
             # train if conditions are met
-            cond_train = (self.global_step_main >= self.start_training and
+            cond_train = ((self.global_step_main * (1 + self.n_workers)) >= self.start_training and
                           self.global_step_main % self.training_interval == 0 and
                           not self.no_training)
+
             if cond_train:
-                crit_loss, act_loss = self.train()
+                avg_crit_loss, avg_act_loss = 0
+                for i in range(self.n_workers):
+                    crit_loss, act_loss = self.train()
+                    avg_crit_loss += crit_loss
+                    avg_act_loss += act_loss
+                avg_crit_loss_loss = avg_crit_loss / self.n_workers
+                avg_act_loss = avg_act_loss / self.n_workers
 
             # save weights if needed
             if self.save_weights and self.global_step_main % self.save_weights_interval == 0 and self.global_step_main > self.start_training:
@@ -278,8 +285,8 @@ class DDPG(Agent):
                     # determine the total number of steps made in all threads
                     total_steps = self.global_step_main * (1 + self.n_workers)
                     # pass logging data to tensorboard
-                    tf.summary.scalar('Critic-Loss', crit_loss, step=total_steps)
-                    tf.summary.scalar('Actor-Loss', act_loss, step=total_steps)
+                    tf.summary.scalar('Critic-Loss', avg_crit_loss_loss, step=total_steps)
+                    tf.summary.scalar('Actor-Loss', avg_act_loss, step=total_steps)
                     scalar_reward = 0
                     for r in reward:
                         scalar_reward += r
@@ -300,6 +307,32 @@ class DDPG(Agent):
         self.clean_up()
         print('\nDone.\n')
 
+    def run_training_only(self):
+        if not self.path_to_read_buffer:
+            raise AttributeError("Can not run training only if no buffer is provided! Please provide buffer.")
+
+        while self.global_episode < self.training_episodes:
+            crit_loss, act_loss = self.train()
+
+            # save weights if needed
+            if self.save_weights and self.global_step_main % self.save_weights_interval == 0:
+                self.save_all_models()
+
+            # log to tensorboard if needed
+            if self.use_tensorboard:
+                with self.summary_writer.as_default():
+                    # determine the total number of steps made in all threads
+                    total_steps = self.global_step_main * (1 + self.n_workers)
+                    # pass logging data to tensorboard
+                    tf.summary.scalar('Critic-Loss', crit_loss, step=total_steps)
+                    tf.summary.scalar('Actor-Loss', act_loss, step=total_steps)
+
+            self.global_step_main += 1
+
+        self.clean_up()
+        print('\nDone.\n')
+
+
     def all_worker_reset(self, running_workers, obs):
         # queue command to worker
         for w in running_workers:
@@ -318,6 +351,7 @@ class DDPG(Agent):
         for w, o, a, e in zip(running_workers, obs, action, range(self.n_workers)):
             single_next_obs, single_reward, single_done = w["result_queue"].get()
             # single_reward = self.cal_custom_reward(single_next_obs)  # added custom reward
+            single_reward = single_reward*10
             single_next_obs = single_next_obs.get_low_dim_data()
             self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
                                       float(single_done), (e+self.global_episode))

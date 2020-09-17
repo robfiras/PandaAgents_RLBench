@@ -4,7 +4,9 @@ import numpy as np
 from rlbench.backend.observation import Observation
 from rlbench.observation_config import ObservationConfig
 from rlbench.environment import Environment
+from rlbench.sim2real.domain_randomization_environment import DomainRandomizationEnvironment
 from rlbench.action_modes import ActionMode
+from rlbench.sim2real.domain_randomization import RandomizeEvery
 
 from agents.misc.opts_arg_evaluator import eval_opts_args
 
@@ -119,7 +121,7 @@ class Agent(object):
                    result_q: mp.Queue,
                    headless):
 
-        env = Environment(action_mode=action_mode, obs_config=obs_config, headless=headless)
+        env = DomainRandomizationEnvironment(action_mode=action_mode, obs_config=obs_config, headless=headless)
         env.launch()
         task = env.get_task(task_class)
         task.reset()
