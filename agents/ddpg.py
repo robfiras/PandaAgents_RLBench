@@ -31,7 +31,7 @@ class ActorNetwork(tf.keras.Model):
 
         self.seed = seed
         glorot_init = tf.keras.initializers.GlorotUniform(seed=self.seed)
-        uniform_init = tf.keras.initializers.RandomUniform(minval=-0.003, maxval=0.003)
+        uniform_init = tf.keras.initializers.RandomUniform(minval=-0.003, maxval=0.003, seed=self.seed)
 
         # define the layers that are going to be used in our actor
         self.hidden_layers = [tf.keras.layers.Dense(dim, activation=activation, kernel_initializer=glorot_init,
@@ -111,7 +111,7 @@ class CriticNetwork(tf.keras.Model):
 
         self.seed = seed
         glorot_init = tf.keras.initializers.GlorotUniform(seed=self.seed)
-        uniform_init = tf.keras.initializers.RandomUniform(minval=-0.0003, maxval=0.0003)
+        uniform_init = tf.keras.initializers.RandomUniform(minval=-0.0003, maxval=0.0003, seed=self.seed)
 
         # define the layers that are going to be used in our critic
         self.hidden_layers = [tf.keras.layers.Dense(dim, activation=activation, kernel_initializer=glorot_init,
@@ -286,6 +286,8 @@ class DDPG(Agent):
                     crit_loss, act_loss = self.train()
                     avg_crit_loss += crit_loss
                     avg_act_loss += act_loss
+                    update_target_variables(self.target_critic.weights, self.critic.weights, tau=self.tau)
+                    update_target_variables(self.target_actor.weights, self.actor.weights, tau=self.tau)
                 avg_crit_loss_loss = avg_crit_loss / self.n_workers
                 avg_act_loss = avg_act_loss / self.n_workers
 
