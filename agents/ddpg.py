@@ -12,7 +12,7 @@ from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
 from agents.base import Agent
 
-#tf.config.run_functions_eagerly(True)
+tf.config.run_functions_eagerly(True)
 tf.keras.backend.set_floatx('float64')
 
 
@@ -32,7 +32,6 @@ class ActorNetwork(tf.keras.Model):
         self.seed = seed
         glorot_init = tf.keras.initializers.GlorotUniform(seed=self.seed)
         uniform_init = tf.keras.initializers.RandomUniform(minval=-0.003, maxval=0.003, seed=self.seed)
-        tf.keras.layers.Activation
 
         # define the layers that are going to be used in our actor
         self.hidden_layers = [tf.keras.layers.Dense(dim, activation=activation, kernel_initializer=glorot_init,
@@ -83,6 +82,10 @@ class ActorNetwork(tf.keras.Model):
             pred = self.add_ou_noise(pred)
         else:
             pred = self.add_gaussian_noise(pred)
+
+        # cut actions
+        max_actions = np.concatenate((self.max_actions.numpy(), [[1.0]]), axis=1)   # append gripper action
+        pred = tf.clip_by_value(pred, clip_value_min=-max_actions, clip_value_max=max_actions)
 
         return pred if return_tensor else pred.numpy()
 
@@ -252,7 +255,12 @@ class DDPG(Agent):
         done = []
         running_workers = []
         number_of_succ_episodes = 0
-        logger = CmdLineLogger(10, self.training_episodes, self.n_workers)
+        step_in_episode = 0
+
+        _, obs = self.task.reset()
+        reward = self.cal_custom_reward(obs)
+
+        logger = CmdLineLogger(10, self.training_episodes, 1)
         while self.global_episode < self.training_episodes:
             # reset episode if maximal length is reached or all worker are done
             if self.global_step_main % self.episode_length == 0 or not running_workers:
@@ -264,6 +272,7 @@ class DDPG(Agent):
 
                 if self.global_step_main != 0:
                     self.global_episode += self.n_workers
+                    step_in_episode = 0
 
                 logger(self.global_episode, number_of_succ_episodes)
 
@@ -304,14 +313,15 @@ class DDPG(Agent):
                     for r in reward:
                         scalar_reward += r
                     tf.summary.scalar('Reward', float(scalar_reward), step=total_steps)
+                    for d in done:
+                        if d > 0.0:
+                            number_of_succ_episodes += 1
+                            tf.summary.scalar('Successful episode length', step_in_episode, step=total_steps)
                     tf.summary.scalar('Number of successful Episodes', float(number_of_succ_episodes), step=total_steps)
-
-            for r in reward:
-                if r > 0.0:
-                    number_of_succ_episodes += 1
 
             # increment and save next_obs as obs
             self.global_step_main += 1
+            step_in_episode += 1
             obs = next_obs
             next_obs = []
             reward = []
