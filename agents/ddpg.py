@@ -12,7 +12,7 @@ from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
 from agents.base import Agent
 
-tf.config.run_functions_eagerly(True)
+# tf.config.run_functions_eagerly(True)
 tf.keras.backend.set_floatx('float64')
 
 
@@ -256,11 +256,7 @@ class DDPG(Agent):
         running_workers = []
         number_of_succ_episodes = 0
         step_in_episode = 0
-
-        _, obs = self.task.reset()
-        reward = self.cal_custom_reward(obs)
-
-        logger = CmdLineLogger(10, self.training_episodes, 1)
+        logger = CmdLineLogger(10, self.training_episodes, self.n_workers)
         while self.global_episode < self.training_episodes:
             # reset episode if maximal length is reached or all worker are done
             if self.global_step_main % self.episode_length == 0 or not running_workers:
