@@ -364,7 +364,7 @@ class DDPG(Agent):
         finished_workers = []
         for w, o, a, e in zip(running_workers, obs, action, range(self.n_workers)):
             single_next_obs, single_reward, single_done = w["result_queue"].get()
-            single_reward = self.cal_custom_reward(single_next_obs)  # added custom reward
+            single_reward = self.cal_custom_reward(single_next_obs, single_done)  # added custom reward
             # single_reward = single_reward*10
             single_next_obs = single_next_obs.get_low_dim_data()
             self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
@@ -393,16 +393,19 @@ class DDPG(Agent):
 
         return actions
 
-    def cal_custom_reward(self, obs: Observation):
-        max_precision = 0.01    # 1cm
-        max_reward = 1/max_precision
-        scale = 0.1
-        gripper_pos = obs.gripper_pose[0:3]         # gripper x,y,z
-        target_pos = obs.task_low_dim_state         # target x,y,z
-        dist = np.sqrt(np.sum(np.square(np.subtract(target_pos, gripper_pos)), axis=0))     # euclidean norm
-        reward = min((1/(dist + 0.00001)), max_reward)
-        reward = scale * reward
-        return reward
+    def cal_custom_reward(self, obs: Observation, done):
+        if done:
+            max_precision = 0.01    # 1cm
+            max_reward = 1/max_precision
+            scale = 0.1
+            gripper_pos = obs.gripper_pose[0:3]         # gripper x,y,z
+            target_pos = obs.task_low_dim_state         # target x,y,z
+            dist = np.sqrt(np.sum(np.square(np.subtract(target_pos, gripper_pos)), axis=0))     # euclidean norm
+            reward = min((1/(dist + 0.00001)), max_reward)
+            reward = scale * reward
+            return reward
+        else:
+            return 0.0
 
     def save_all_models(self):
         path_to_dir = os.path.join(self.root_log_dir, "weights", "")
