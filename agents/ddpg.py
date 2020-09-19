@@ -207,8 +207,7 @@ class DDPG(Agent):
                                           path_to_db_read=self.path_to_read_buffer,
                                           dim_observations=self.dim_observations,
                                           dim_actions=self.dim_actions,
-                                          write=self.write_buffer,
-                                          save_interval=3200)
+                                          write=self.write_buffer)
 
         # --- define actor and its target---
         self.max_actions = self.task.get_joint_upper_velocity_limits()
@@ -325,7 +324,7 @@ class DDPG(Agent):
         if not self.path_to_read_buffer:
             raise AttributeError("Can not run training only if no buffer is provided! Please provide buffer.")
 
-        while self.global_episode < self.training_episodes:
+        while self.global_step_main < self.training_episodes:
             crit_loss, act_loss = self.train()
 
             # save weights if needed
@@ -342,7 +341,7 @@ class DDPG(Agent):
                     tf.summary.scalar('Actor-Loss', act_loss, step=total_steps)
 
             self.global_step_main += 1
-            print("Training step %d Actor-Loss %f Critic-Loss %f" % (self.global_episode, act_loss, crit_loss))
+            print("Training step %d Actor-Loss %f Critic-Loss %f" % (self.global_step_main, act_loss, crit_loss))
 
         self.clean_up()
         print('\nDone.\n')
@@ -365,8 +364,8 @@ class DDPG(Agent):
         finished_workers = []
         for w, o, a, e in zip(running_workers, obs, action, range(self.n_workers)):
             single_next_obs, single_reward, single_done = w["result_queue"].get()
-            # single_reward = self.cal_custom_reward(single_next_obs)  # added custom reward
-            single_reward = single_reward*10
+            single_reward = self.cal_custom_reward(single_next_obs)  # added custom reward
+            # single_reward = single_reward*10
             single_next_obs = single_next_obs.get_low_dim_data()
             self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
                                       float(single_done), (e+self.global_episode))

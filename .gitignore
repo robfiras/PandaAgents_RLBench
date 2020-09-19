@@ -9,3 +9,5 @@ run.sh
 run2.sh
 run3.sh
 run_validation.sh
+main_training.py
+run_training.sh
