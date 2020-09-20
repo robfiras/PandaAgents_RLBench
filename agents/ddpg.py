@@ -12,7 +12,7 @@ from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
 from agents.base import Agent
 
-# tf.config.run_functions_eagerly(True)
+#tf.config.run_functions_eagerly(True)
 tf.keras.backend.set_floatx('float64')
 
 
@@ -83,11 +83,18 @@ class ActorNetwork(tf.keras.Model):
         else:
             pred = self.add_gaussian_noise(pred)
 
-        # cut actions
+        # clip actions
         max_actions = np.concatenate((self.max_actions.numpy(), [[1.0]]), axis=1)   # append gripper action
-        pred = tf.clip_by_value(pred, clip_value_min=-max_actions, clip_value_max=max_actions)
-
+        min_actions = np.concatenate((-self.max_actions.numpy(), [[0.0]]), axis=1)   # append gripper action
+        pred = tf.clip_by_value(pred, clip_value_min=min_actions, clip_value_max=max_actions)
         return pred if return_tensor else pred.numpy()
+
+    def random_predict(self, obs, return_tensor=False):
+        arm_action_limits = np.tile(self.max_actions.numpy(), (obs.shape[0], 1))
+        rand_arm_actions = (np.random.rand(obs.shape[0], self.dim_actions-1)-0.5) * (2*arm_action_limits)
+        rand_gripper_action = np.random.rand(obs.shape[0], 1)
+        pred = np.concatenate((rand_arm_actions, rand_gripper_action), axis=1)
+        return tf.constant(pred) if return_tensor else pred
 
     def add_gaussian_noise(self, predictions):
         """ adds noise from a normal (Gaussian) distribution """
@@ -144,6 +151,9 @@ class DDPG(Agent):
                  episode_length=40,
                  training_interval=1,
                  start_training=500000,
+                 min_epsilon=0.2,
+                 max_epsilon=0.9,
+                 epsilon_decay_episodes=None,
                  save_weights_interval=400,
                  use_ou_noise=False,
                  buffer_size=500000,
@@ -162,6 +172,10 @@ class DDPG(Agent):
         :param episode_length: length of an episode
         :param training_interval: intervals used for training (default==1 -> train ech step)
         :param start_training: step at which training is started
+        :param min_epsilon: minimum epsilon used for eps-greedy policy
+        :param max_epsilon: maximum epsilon used for eps-greedy policy
+        :param epsilon_decay_episodes: episodes within epsilon should be decayed to min_epsilon. Note: Decaying starts when
+        starting training! And if epsilon_decay_episodes=None, min_epsilon is reached at end of training
         :param save_weights_interval: interval in which the weights are saved
         :param use_ou_noise: if true, Ornstein-Uhlenbeck noise is used instead of Gaussian noise
         :param buffer_size: size of the replay buffer
@@ -186,13 +200,17 @@ class DDPG(Agent):
         self.episode_length = episode_length
         self.training_interval = training_interval
         self.start_training = start_training
+        self.epsilon = 1.0
+        self.max_epsilon = max_epsilon
+        self.min_epsilon = min_epsilon
+        self.epsilon_decay_episodes = epsilon_decay_episodes
         self.global_step_main = 0
         self.global_episode = 0
         self.use_ou_noise = use_ou_noise
 
         # use copying instead of "soft" updates
-        self.use_target_copying = False
-        self.interval_copy_target = 500
+        self.use_target_copying = True
+        self.interval_copy_target = 300
 
         if not self.training_episodes:
             self.training_episodes = 1000   # default value
@@ -230,9 +248,10 @@ class DDPG(Agent):
             self.target_actor.load_weights(os.path.join(self.path_to_model, "actor", "variables", "variables"))
         else:
             # copy the weights to the target actor
-            update_target_variables(self.target_actor.weights, self.actor.weights, tau=1.0)
+            #update_target_variables(self.target_actor.weights, self.actor.weights, tau=1.0)
+            self.target_actor.set_weights(self.actor.get_weights())
         # setup the actor's optimizer
-        self.optimizer_actor = tf.keras.optimizers.Adam(learning_rate=lr_actor)
+        self.optimizer_actor = tf.keras.optimizers.Adagrad(learning_rate=lr_actor)
 
         # --- define the critic and its target ---
         self.critic = CriticNetwork(layers_critic, dim_obs=self.dim_observations, dim_outputs=1)   # one Q-value per state needed
@@ -247,9 +266,10 @@ class DDPG(Agent):
             self.target_critic.load_weights(os.path.join(self.path_to_model, "critic", "variables", "variables"))
         else:
             # copy the weights to the target critic
-            update_target_variables(self.target_critic.weights, self.critic.weights, tau=1.0)
+            #update_target_variables(self.target_critic.weights, self.critic.weights, tau=1.0)
+            self.target_critic.set_weights(self.critic.get_weights())
         # setup the critic's optimizer
-        self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=lr_critic)
+        self.optimizer_critic = tf.keras.optimizers.Adagrad(learning_rate=lr_critic)
 
     def run(self):
         obs = []
@@ -277,7 +297,7 @@ class DDPG(Agent):
                 logger(self.global_episode, number_of_succ_episodes)
 
             # predict action with actor
-            action = self.get_action(obs, noise=(False if self.no_training else True))
+            action = self.get_action(obs, mode="eps-greedy-random")
 
             # make a step in workers
             self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
@@ -319,6 +339,7 @@ class DDPG(Agent):
                             number_of_succ_episodes += 1
                             tf.summary.scalar('Successful episode length', step_in_episode, step=total_steps)
                     tf.summary.scalar('Number of successful Episodes', float(number_of_succ_episodes), step=total_steps)
+                    tf.summary.scalar('Epsilon', self.epsilon, step=total_steps)
 
             # increment and save next_obs as obs
             self.global_step_main += 1
@@ -390,17 +411,44 @@ class DDPG(Agent):
         for w in finished_workers:
             running_workers.remove(w)
 
-    def get_action(self, obs, noise=True):
+    def get_action(self, obs, mode):
         """
         Predicts an action using the actor network. DO NOT USE WHILE TRAINING. Use predict() or noisy_predict() instead
         :param obs: received observation
-        :param noise: if true adds noise to actions tensor
+        :param mode: sets the mode -> either greedy, greedy+noise or random
         :return: returns an numpy array containing the corresponding actions
         """
-        if noise:
-            actions = self.actor.noisy_predict(tf.constant(obs))
-        else:
+        # set epsilon-decay if not set yet
+        if not self.epsilon_decay_episodes and self.global_step_main > self.start_training:
+            self.epsilon_decay_episodes = self.training_episodes - self.global_episode
+        # calculate epsilon if decay started
+        if self.epsilon_decay_episodes and self.global_step_main > self.start_training:
+            epsilon_gradient = ((self.max_epsilon - self.min_epsilon)/self.epsilon_decay_episodes)
+            self.epsilon = epsilon_gradient * (self.epsilon_decay_episodes - (self.training_episodes - self.global_episode))
+            self.epsilon = max(self.epsilon, self.min_epsilon)
+        if self.no_training:
+            self.epsilon = 0.0
+
+        if mode == "greedy":
             actions = self.actor.predict(tf.constant(obs))
+        elif mode == "greedy+noise":
+            actions = self.actor.noisy_predict(tf.constant(obs))
+        elif mode == "random":
+            actions = self.actor.random_predict(np.array(obs))
+        elif mode == "eps-greedy-noise":
+            choice = np.random.choice(2, 1, p=[self.epsilon, (1-self.epsilon)])
+            if choice == 0:
+                actions = self.actor.noisy_predict(tf.constant(obs))
+            if choice == 1:
+                actions = self.actor.predict(tf.constant(obs))
+        elif mode == "eps-greedy-random":
+            choice = np.random.choice(2, 1, p=[self.epsilon, (1-self.epsilon)])
+            if choice == 0:
+                actions = self.actor.random_predict(np.array(obs))
+            if choice == 1:
+                actions = self.actor.predict(tf.constant(obs))
+        else:
+            raise ValueError("%s not allowed as mode! Choose either greedy, greedy+noise or random." % mode)
 
         return actions
 
@@ -483,8 +531,10 @@ class DDPG(Agent):
         # update target weights
         if self.use_target_copying:
             if self.global_step_main % self.interval_copy_target == 0 and self.global_step_main > 10:
-                update_target_variables(self.target_critic.weights, self.critic.weights, 1.0)
-                update_target_variables(self.target_actor.weights, self.actor.weights, 1.0)
+                #update_target_variables(self.target_critic.weights, self.critic.weights, 1.0)
+                #update_target_variables(self.target_actor.weights, self.actor.weights, 1.0)
+                self.target_actor.set_weights(self.actor.get_weights())
+                self.target_critic.set_weights(self.critic.get_weights())
         else:
             update_target_variables(self.target_critic.weights, self.critic.weights, self.tau)
             update_target_variables(self.target_actor.weights, self.actor.weights, self.tau)

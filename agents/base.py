@@ -1,6 +1,8 @@
 import multiprocessing as mp
+import random
 
 import numpy as np
+import tensorflow as tf
 from rlbench.backend.observation import Observation
 from rlbench.observation_config import ObservationConfig
 from rlbench.environment import Environment
@@ -40,7 +42,12 @@ class Agent(object):
         self.task_class = task_class
         self.obs_config = obs_config
 
+        # set seed of random and numpy
         self.seed = seed
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+        tf.random.set_seed(self.seed)
+
 
         if not self.only_low_dim_obs:
             raise ValueError("High-dim observations currently not supported!")
