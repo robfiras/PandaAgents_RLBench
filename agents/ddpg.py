@@ -190,6 +190,10 @@ class DDPG(Agent):
         self.global_episode = 0
         self.use_ou_noise = use_ou_noise
 
+        # use copying instead of "soft" updates
+        self.use_target_copying = False
+        self.interval_copy_target = 500
+
         if not self.training_episodes:
             self.training_episodes = 1000   # default value
         if self.save_weights:
@@ -300,11 +304,12 @@ class DDPG(Agent):
                 self.save_all_models()
 
             # log to tensorboard if needed
-            if self.use_tensorboard and cond_train:
+            if self.use_tensorboard:
                 with self.summary_writer.as_default():
                     # pass logging data to tensorboard
-                    tf.summary.scalar('Critic-Loss', avg_crit_loss_loss, step=total_steps)
-                    tf.summary.scalar('Actor-Loss', avg_act_loss, step=total_steps)
+                    if cond_train:
+                        tf.summary.scalar('Critic-Loss', avg_crit_loss_loss, step=total_steps)
+                        tf.summary.scalar('Actor-Loss', avg_act_loss, step=total_steps)
                     scalar_reward = 0
                     for r in reward:
                         scalar_reward += r
@@ -400,7 +405,8 @@ class DDPG(Agent):
         return actions
 
     def cal_custom_reward(self, obs: Observation, done):
-        if done:
+        finished = (done or ((self.global_step_main+1) % self.episode_length == 0))
+        if finished:
             max_precision = 0.01    # 1cm
             max_reward = 1/max_precision
             scale = 0.1
@@ -475,8 +481,13 @@ class DDPG(Agent):
         self.optimizer_actor.apply_gradients(zip(actor_gradients, self.actor.trainable_variables))
 
         # update target weights
-        update_target_variables(self.target_critic.weights, self.critic.weights, self.tau)
-        update_target_variables(self.target_actor.weights, self.actor.weights, self.tau)
+        if self.use_target_copying:
+            if self.global_step_main % self.interval_copy_target == 0 and self.global_step_main > 10:
+                update_target_variables(self.target_critic.weights, self.critic.weights, 1.0)
+                update_target_variables(self.target_actor.weights, self.actor.weights, 1.0)
+        else:
+            update_target_variables(self.target_critic.weights, self.critic.weights, self.tau)
+            update_target_variables(self.target_actor.weights, self.actor.weights, self.tau)
 
         return critic_loss, actor_loss
 
