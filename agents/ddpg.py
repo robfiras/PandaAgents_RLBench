@@ -90,6 +90,7 @@ class ActorNetwork(tf.keras.Model):
         return pred if return_tensor else pred.numpy()
 
     def random_predict(self, obs, return_tensor=False):
+        """ makes a random prediction of actions """
         arm_action_limits = np.tile(self.max_actions.numpy(), (obs.shape[0], 1))
         rand_arm_actions = (np.random.rand(obs.shape[0], self.dim_actions-1)-0.5) * (2*arm_action_limits)
         rand_gripper_action = np.random.rand(obs.shape[0], 1)
@@ -272,6 +273,7 @@ class DDPG(Agent):
         self.optimizer_critic = tf.keras.optimizers.Adagrad(learning_rate=lr_critic)
 
     def run(self):
+        """ Main run method for incrementing the simulation and training the agent """
         obs = []
         action = []
         reward = []
@@ -353,6 +355,7 @@ class DDPG(Agent):
         print('\nDone.\n')
 
     def run_training_only(self):
+        """ Runs only the training methods without connecting to the simulation. Reading replay buffer needed! """
         if not self.path_to_read_buffer:
             raise AttributeError("Can not run training only if no buffer is provided! Please provide buffer.")
 
@@ -378,8 +381,12 @@ class DDPG(Agent):
         self.clean_up()
         print('\nDone.\n')
 
-
     def all_worker_reset(self, running_workers, obs):
+        """
+        Resets the episodes of all all workers
+        :param running_workers: list of running worker connections
+        :param obs: list of observations to be filled with initial observations
+        """
         # queue command to worker
         for w in running_workers:
             w["command_queue"].put(("reset", ()))
@@ -389,6 +396,15 @@ class DDPG(Agent):
             obs.append(single_obs)
 
     def all_worker_step(self, obs, action, reward, next_obs, done, running_workers):
+        """
+        Increments the simulation in all running workers, receives the new data and adds it to the replay buffer.
+        :param obs: list of observations to be filled
+        :param action: list of actions to be filled
+        :param reward: list of rewards to be filled
+        :param next_obs: list of next observations to be filled
+        :param done: list of dones to be filled
+        :param running_workers: list of running worker connections
+        """
         for w, a in zip(running_workers, action):
             w["command_queue"].put(("step", (a,)))
 
@@ -415,8 +431,8 @@ class DDPG(Agent):
         """
         Predicts an action using the actor network. DO NOT USE WHILE TRAINING. Use predict() or noisy_predict() instead
         :param obs: received observation
-        :param mode: sets the mode -> either greedy, greedy+noise or random
-        :return: returns an numpy array containing the corresponding actions
+        :param mode: sets the mode -> either greedy, greedy+noise, random, eps-greedy-noise or eps-greedy-random
+        :return: returns a numpy array containing the corresponding actions
         """
         # set epsilon-decay if not set yet
         total_steps = self.global_step_main * (1 + self.n_workers)
