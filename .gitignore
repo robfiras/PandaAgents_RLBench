@@ -11,3 +11,4 @@ run3.sh
 run_validation.sh
 main_training.py
 run_training.sh
+eval_scripts/eval_action.sh

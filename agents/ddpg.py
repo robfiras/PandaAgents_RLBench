@@ -305,6 +305,8 @@ class DDPG(Agent):
             self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
                                  done=done, running_workers=running_workers)
 
+            print("Observation is: ", obs)
+
             # train if conditions are met
             total_steps = self.global_step_main * (1 + self.n_workers)
             cond_train = (total_steps >= self.start_training and
