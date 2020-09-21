@@ -200,9 +200,9 @@ class DDPG(Agent):
         self.episode_length = episode_length
         self.training_interval = training_interval
         self.start_training = start_training
-        self.epsilon = 1.0
         self.max_epsilon = max_epsilon
         self.min_epsilon = min_epsilon
+        self.epsilon = max_epsilon
         self.epsilon_decay_episodes = epsilon_decay_episodes
         self.global_step_main = 0
         self.global_episode = 0
@@ -419,12 +419,14 @@ class DDPG(Agent):
         :return: returns an numpy array containing the corresponding actions
         """
         # set epsilon-decay if not set yet
-        if not self.epsilon_decay_episodes and self.global_step_main > self.start_training:
+        total_steps = self.global_step_main * (1 + self.n_workers)
+        if not self.epsilon_decay_episodes and total_steps > self.start_training:
             self.epsilon_decay_episodes = self.training_episodes - self.global_episode
         # calculate epsilon if decay started
-        if self.epsilon_decay_episodes and self.global_step_main > self.start_training:
+        if self.epsilon_decay_episodes and total_steps > self.start_training:
             epsilon_gradient = ((self.max_epsilon - self.min_epsilon)/self.epsilon_decay_episodes)
-            self.epsilon = epsilon_gradient * (self.epsilon_decay_episodes - (self.training_episodes - self.global_episode))
+            self.epsilon = self.max_epsilon - epsilon_gradient * (self.global_episode - self.training_episodes + self.epsilon_decay_episodes)
+            self.epsilon = min(self.epsilon, self.max_epsilon)
             self.epsilon = max(self.epsilon, self.min_epsilon)
         if self.no_training:
             self.epsilon = 0.0
