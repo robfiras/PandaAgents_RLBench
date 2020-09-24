@@ -48,6 +48,41 @@ class Agent(object):
         np.random.seed(self.seed)
         tf.random.set_seed(self.seed)
 
+        # set dimensions
+        self.dim_observations = 40
+        self.dim_actions = 8
+
+        # --- set observation limits for scaling
+        # gripper open
+        self.gripper_open_limits = np.array([1.0])
+        # joint velocity limits
+        self.joint_vel_limits = np.array([2.175, 2.175, 2.175, 2.175, 2.609, 2.609, 2.609])     # upper velocity limits taken from panda model
+        # joint position -> max in pos/neg direction defines limit (for symmetric scaling)
+        self.lower_joint_pos_limits_deg = [-166.0, -101.0, -166.0, -176.0, -166.0, -1.0, -166.0]  # min joint pos [°] taken from panda model
+        self.range_joint_pos_deg = [332.0, 202.0, 332.0, 172.0, 332.0, 216.0, 332.0]    # range joint pos [°] taken from panda model
+        self.lower_joint_pos_limits_rad = (np.array(self.lower_joint_pos_limits_deg)/360.0)*2*np.pi
+        self.range_joint_pos_rad = (np.array(self.range_joint_pos_deg)/360.0)*2*np.pi
+        self.upper_joint_pos_limits_rad = self.lower_joint_pos_limits_rad + self.range_joint_pos_rad
+        self.joint_pos_limits_rad = np.amax((np.abs(self.lower_joint_pos_limits_rad), self.upper_joint_pos_limits_rad), axis=0)
+        # joint forces
+        self.joint_force_limits = np.array([87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0])
+        # gripper pose -> first 3 entry are x,y,z and rest are quaternions
+        self.gripper_pose_limits = np.array([3.0, 3.0, 3.0, 1.0, 1.0, 1.0, 1.0])
+        # gripper joint position
+        self.gripper_joint_pos_limits = np.array([0.08, 0.08])
+        # gripper touch forces -> 2* x,y,z
+        self.gripper_force_limits = np.array([20.0, 20.0, 20.0, 20.0, 20.0, 20.0])
+        # low dim task -> here for reach target
+        self.low_dim_task_limits = np.array([3.0, 3.0, 3.0])
+        # concatenate to scaling vector
+        self.obs_scaling_vector = np.concatenate((self.gripper_open_limits,
+                                                  self.joint_vel_limits,
+                                                  self.joint_pos_limits_rad,
+                                                  self.joint_force_limits,
+                                                  self.gripper_pose_limits,
+                                                  self.gripper_joint_pos_limits,
+                                                  self.gripper_force_limits,
+                                                  self.low_dim_task_limits))
 
         if not self.only_low_dim_obs:
             raise ValueError("High-dim observations currently not supported!")
@@ -56,25 +91,12 @@ class Agent(object):
         self.workers = []
         self.command_queue = []
         self.result_queue = []
-        self.run_workers(self.n_workers, self.headless)
+        self.run_workers()
         self.worker_conn = [{"command_queue": cq,
                              "result_queue": rq,
                              "index": idx} for cq, rq, idx in zip(self.command_queue,
                                                                   self.result_queue,
                                                                   range(self.n_workers))]
-
-        # main thread is always running an environment as well for configuration
-        self.env = Environment(action_mode=self.action_mode,
-                               obs_config=self.obs_config,
-                               headless=True)
-
-        self.env.launch()
-        self.task = self.env.get_task(self.task_class)
-        descriptions, obs = self.task.reset()
-
-        # determine dimensions
-        self.dim_observations = np.shape(obs.get_low_dim_data())[0]    # TODO: find better way
-        self.dim_actions = self.env.action_size
 
     @property
     def only_low_dim_obs(self) -> bool:
@@ -102,17 +124,14 @@ class Agent(object):
                          and self.obs_config.front_camera.depth
                          and self.obs_config.front_camera.mask)
 
-        print("low_dim:", low_dim_true)
-        print("high-dim: ", high_dim_true)
-
         if low_dim_true and not high_dim_true:
             return True
         else:
             return False
 
-    def run_workers(self, n_workers, headless):
-        self.command_queue = [mp.Queue()] * n_workers
-        self.result_queue = [mp.Queue()] * n_workers
+    def run_workers(self):
+        self.command_queue = [mp.Queue()] * self.n_workers
+        self.result_queue = [mp.Queue()] * self.n_workers
         self.workers = [mp.Process(target=self.job_worker,
                                    args=(worker_id,
                                          self.action_mode,
@@ -120,7 +139,8 @@ class Agent(object):
                                          self.task_class,
                                          self.command_queue[worker_id],
                                          self.result_queue[worker_id],
-                                         headless),) for worker_id in range(n_workers)]
+                                         self.obs_scaling_vector,
+                                         self.headless),) for worker_id in range(self.n_workers)]
         for worker in self.workers:
             worker.start()
 
@@ -128,6 +148,7 @@ class Agent(object):
                    obs_config, task_class,
                    command_q: mp.Queue,
                    result_q: mp.Queue,
+                   obs_scaling,
                    headless):
 
         env = Environment(action_mode=action_mode, obs_config=obs_config, headless=headless)
@@ -141,10 +162,12 @@ class Agent(object):
             command_args = command[1]
             if command_type == "reset":
                 descriptions, observation = task.reset()
-                result_q.put((descriptions, observation.get_low_dim_data()))
+                observation = observation.get_low_dim_data() / obs_scaling
+                result_q.put((descriptions, observation))
             elif command_type == "step":
                 actions = command_args[0]
                 next_observation, reward, done = task.step(actions)
+                next_observation = next_observation.get_low_dim_data() / obs_scaling
                 result_q.put((next_observation, reward, done))
             elif command_type == "kill":
                 print("Killing worker %d" % worker_id)

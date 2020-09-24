@@ -12,7 +12,7 @@ from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
 from agents.base import Agent
 
-#tf.config.run_functions_eagerly(True)
+# tf.config.run_functions_eagerly(True)
 tf.keras.backend.set_floatx('float64')
 
 
@@ -158,8 +158,8 @@ class DDPG(Agent):
                  save_weights_interval=400,
                  use_ou_noise=False,
                  buffer_size=500000,
-                 lr_actor=0.0001,
-                 lr_critic=0.001,
+                 lr_actor=0.00001,
+                 lr_critic=0.0001,
                  layers_actor=[400, 300],
                  layers_critic=[400, 300],
                  seed=94
@@ -236,7 +236,7 @@ class DDPG(Agent):
                                           write=self.write_buffer)
 
         # --- define actor and its target---
-        self.max_actions = self.task.get_joint_upper_velocity_limits()
+        self.max_actions = [10.0, 10.0, 10.0, 10.0, 5.0, 5.0, 5.0]   # max 10Nm per joint
         self.actor = ActorNetwork(layers_actor, self.dim_actions, self.max_actions, sigma=sigma, use_ou_noise=use_ou_noise)
         self.target_actor = ActorNetwork(layers_actor,  self.dim_actions, self.max_actions, sigma=sigma, use_ou_noise=use_ou_noise)
         # instantiate the models (if we do not instantiate the model, we can not copy their weights)
@@ -304,8 +304,6 @@ class DDPG(Agent):
             # make a step in workers
             self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
                                  done=done, running_workers=running_workers)
-
-            print("Observation is: ", obs)
 
             # train if conditions are met
             total_steps = self.global_step_main * (1 + self.n_workers)
@@ -416,7 +414,6 @@ class DDPG(Agent):
             single_next_obs, single_reward, single_done = w["result_queue"].get()
             single_reward = self.cal_custom_reward(single_next_obs, single_done)  # added custom reward
             # single_reward = single_reward*10
-            single_next_obs = single_next_obs.get_low_dim_data()
             self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
                                       float(single_done), (e+self.global_episode))
             next_obs.append(single_next_obs)
@@ -472,14 +469,14 @@ class DDPG(Agent):
 
         return actions
 
-    def cal_custom_reward(self, obs: Observation, done):
+    def cal_custom_reward(self, obs, done):
         finished = (done or ((self.global_step_main+1) % self.episode_length == 0))
         if finished:
             max_precision = 0.01    # 1cm
             max_reward = 1/max_precision
-            scale = 0.1
-            gripper_pos = obs.gripper_pose[0:3]         # gripper x,y,z
-            target_pos = obs.task_low_dim_state         # target x,y,z
+            scale = 1.0
+            gripper_pos = obs[22:25]         # gripper x,y,z
+            target_pos = obs[-3:]        # target x,y,z
             dist = np.sqrt(np.sum(np.square(np.subtract(target_pos, gripper_pos)), axis=0))     # euclidean norm
             reward = min((1/(dist + 0.00001)), max_reward)
             reward = scale * reward
@@ -529,10 +526,11 @@ class DDPG(Agent):
 
             # lets use a squared error for errors less than 1 and a linear error for errors greater than 1 to reduce
             # the impact of very large errors
-            td_errors = tf.abs(td_errors)
-            clipped_td_errors = tf.clip_by_value(td_errors, 0.0, 1.0)
-            linear_errors = 2 * (td_errors - clipped_td_errors)
-            critic_loss = tf.reduce_mean(tf.square(clipped_td_errors) + linear_errors)
+            critic_loss = tf.reduce_mean(tf.square(td_errors))
+            #td_errors = tf.abs(td_errors)
+            #clipped_td_errors = tf.clip_by_value(td_errors, 0.0, 1.0)
+            #linear_errors = 2 * (td_errors - clipped_td_errors)
+            #critic_loss = tf.reduce_mean(tf.square(clipped_td_errors) + linear_errors)
 
         # calculate the gradients and optimize
         critic_gradients = tape.gradient(critic_loss, self.critic.trainable_variables)

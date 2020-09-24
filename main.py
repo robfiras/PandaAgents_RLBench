@@ -15,7 +15,7 @@ obs_config.set_all_high_dim(not obs_only_low_dim)
 obs_config.set_all_low_dim(obs_only_low_dim)
 
 # define action mode
-action_mode = ActionMode(ArmActionMode.ABS_JOINT_VELOCITY)
+action_mode = ActionMode(ArmActionMode.ABS_JOINT_TORQUE)
 
 # create an agent
 agent = DDPG(argv=sys.argv[1:],
