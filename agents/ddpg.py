@@ -100,7 +100,7 @@ class ActorNetwork(tf.keras.Model):
     def add_gaussian_noise(self, predictions):
         """ adds noise from a normal (Gaussian) distribution """
         noisy_predictions = predictions + tf.random.normal(shape=predictions.shape, mean=self.mu, stddev=self.sigma,
-                                                           dtype=tf.float32, seed=self.seed)
+                                                           dtype=tf.float64, seed=self.seed)
         return noisy_predictions
 
     def add_ou_noise(self, predictions):
@@ -119,7 +119,7 @@ class CriticNetwork(tf.keras.Model):
 
         # check if default activations should be used (relus)
         if not activations:
-            activations = [tf.keras.layers.LeakyReLU(alpha=0.01)] * len(units_hidden_layers)
+            activations = ["relu"] * len(units_hidden_layers)
 
         self.seed = seed
         glorot_init = tf.keras.initializers.GlorotUniform(seed=self.seed)
@@ -147,7 +147,7 @@ class DDPG(Agent):
                  task_class,
                  gamma=0.99,
                  tau=0.001,
-                 sigma=0.4,
+                 sigma=0.05,
                  batch_size=64,
                  episode_length=40,
                  training_interval=1,
@@ -158,8 +158,8 @@ class DDPG(Agent):
                  save_weights_interval=400,
                  use_ou_noise=False,
                  buffer_size=500000,
-                 lr_actor=0.00001,
-                 lr_critic=0.0001,
+                 lr_actor=0.0001,
+                 lr_critic=0.001,
                  layers_actor=[400, 300],
                  layers_critic=[400, 300],
                  seed=94
@@ -208,6 +208,10 @@ class DDPG(Agent):
         self.global_step_main = 0
         self.global_episode = 0
         self.use_ou_noise = use_ou_noise
+        self.layers_actor = layers_actor
+        self.layers_critic = layers_critic
+        self.lr_actor = lr_actor
+        self.lr_critic = lr_critic
 
         # use copying instead of "soft" updates
         self.use_target_copying = True
@@ -236,9 +240,9 @@ class DDPG(Agent):
                                           write=self.write_buffer)
 
         # --- define actor and its target---
-        self.max_actions = [10.0, 10.0, 10.0, 10.0, 5.0, 5.0, 5.0]   # max 10Nm per joint
-        self.actor = ActorNetwork(layers_actor, self.dim_actions, self.max_actions, sigma=sigma, use_ou_noise=use_ou_noise)
-        self.target_actor = ActorNetwork(layers_actor,  self.dim_actions, self.max_actions, sigma=sigma, use_ou_noise=use_ou_noise)
+        self.max_actions = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        self.actor = ActorNetwork(self.layers_actor, self.dim_actions, self.max_actions, sigma=sigma, use_ou_noise=use_ou_noise)
+        self.target_actor = ActorNetwork(self.layers_actor,  self.dim_actions, self.max_actions, sigma=sigma, use_ou_noise=use_ou_noise)
         # instantiate the models (if we do not instantiate the model, we can not copy their weights)
         self.actor.build((1, self.dim_inputs_actor))
         self.target_actor.build((1, self.dim_inputs_actor))
@@ -252,11 +256,11 @@ class DDPG(Agent):
             #update_target_variables(self.target_actor.weights, self.actor.weights, tau=1.0)
             self.target_actor.set_weights(self.actor.get_weights())
         # setup the actor's optimizer
-        self.optimizer_actor = tf.keras.optimizers.Adagrad(learning_rate=lr_actor)
+        self.optimizer_actor = tf.keras.optimizers.Adam(learning_rate=self.lr_actor)
 
         # --- define the critic and its target ---
-        self.critic = CriticNetwork(layers_critic, dim_obs=self.dim_observations, dim_outputs=1)   # one Q-value per state needed
-        self.target_critic = CriticNetwork(layers_critic, dim_obs=self.dim_observations, dim_outputs=1)    # one Q-value per state needed
+        self.critic = CriticNetwork(self.layers_critic, dim_obs=self.dim_observations, dim_outputs=1)   # one Q-value per state needed
+        self.target_critic = CriticNetwork(self.layers_critic, dim_obs=self.dim_observations, dim_outputs=1)    # one Q-value per state needed
         # instantiate the models (if we do not instantiate the model, we can not copy their weights)
         self.critic.build((1, self.dim_inputs_critic))
         self.target_critic.build((1, self.dim_inputs_critic))
@@ -270,7 +274,7 @@ class DDPG(Agent):
             #update_target_variables(self.target_critic.weights, self.critic.weights, tau=1.0)
             self.target_critic.set_weights(self.critic.get_weights())
         # setup the critic's optimizer
-        self.optimizer_critic = tf.keras.optimizers.Adagrad(learning_rate=lr_critic)
+        self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=self.lr_critic)
 
     def run(self):
         """ Main run method for incrementing the simulation and training the agent """
@@ -306,7 +310,7 @@ class DDPG(Agent):
                                  done=done, running_workers=running_workers)
 
             # train if conditions are met
-            total_steps = self.global_step_main * (1 + self.n_workers)
+            total_steps = self.global_step_main * self.n_workers
             cond_train = (total_steps >= self.start_training and
                           self.global_step_main % self.training_interval == 0 and
                           not self.no_training)
@@ -314,12 +318,18 @@ class DDPG(Agent):
             if cond_train:
                 avg_crit_loss = 0
                 avg_act_loss = 0
+                worker_training_actors = 0
                 for i in range(self.n_workers):
                     crit_loss, act_loss = self.train()
                     avg_crit_loss += crit_loss
-                    avg_act_loss += act_loss
-                avg_crit_loss_loss = avg_crit_loss / self.n_workers
-                avg_act_loss = avg_act_loss / self.n_workers
+                    if act_loss:
+                        avg_act_loss += act_loss
+                        worker_training_actors += 1
+                avg_crit_loss = avg_crit_loss / self.n_workers
+                if worker_training_actors != 0:
+                    avg_act_loss = avg_act_loss / worker_training_actors
+                else:
+                    avg_act_loss = None
 
             # save weights if needed
             if self.save_weights and total_steps % self.save_weights_interval == 0 and total_steps > self.start_training:
@@ -330,7 +340,9 @@ class DDPG(Agent):
                 with self.summary_writer.as_default():
                     # pass logging data to tensorboard
                     if cond_train:
-                        tf.summary.scalar('Critic-Loss', avg_crit_loss_loss, step=total_steps)
+                        tf.summary.scalar('Critic-Loss', avg_crit_loss, step=total_steps)
+                        if avg_act_loss:
+                            tf.summary.scalar('Actor-Loss', avg_act_loss, step=total_steps)
                         tf.summary.scalar('Actor-Loss', avg_act_loss, step=total_steps)
                     scalar_reward = 0
                     for r in reward:
@@ -370,13 +382,15 @@ class DDPG(Agent):
             if self.use_tensorboard:
                 with self.summary_writer.as_default():
                     # determine the total number of steps made in all threads
-                    total_steps = self.global_step_main * (1 + self.n_workers)
+                    total_steps = self.global_step_main * self.n_workers
                     # pass logging data to tensorboard
                     tf.summary.scalar('Critic-Loss', crit_loss, step=total_steps)
-                    tf.summary.scalar('Actor-Loss', act_loss, step=total_steps)
+                    if act_loss:
+                        tf.summary.scalar('Actor-Loss', act_loss, step=total_steps)
 
             self.global_step_main += 1
-            print("Training step %d Actor-Loss %f Critic-Loss %f" % (self.global_step_main, act_loss, crit_loss))
+            if act_loss:
+                print("Training step %d Actor-Loss %f Critic-Loss %f" % (self.global_step_main, act_loss, crit_loss))
 
         self.clean_up()
         print('\nDone.\n')
@@ -412,7 +426,7 @@ class DDPG(Agent):
         finished_workers = []
         for w, o, a, e in zip(running_workers, obs, action, range(self.n_workers)):
             single_next_obs, single_reward, single_done = w["result_queue"].get()
-            single_reward = self.cal_custom_reward(single_next_obs, single_done)  # added custom reward
+            single_reward = self.cal_custom_reward_2(single_done)  # added custom reward
             # single_reward = single_reward*10
             self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
                                       float(single_done), (e+self.global_episode))
@@ -434,17 +448,17 @@ class DDPG(Agent):
         :return: returns a numpy array containing the corresponding actions
         """
         # set epsilon-decay if not set yet
-        total_steps = self.global_step_main * (1 + self.n_workers)
-        if not self.epsilon_decay_episodes and total_steps > self.start_training:
-            self.epsilon_decay_episodes = self.training_episodes - self.global_episode
-        # calculate epsilon if decay started
-        if self.epsilon_decay_episodes and total_steps > self.start_training:
-            epsilon_gradient = ((self.max_epsilon - self.min_epsilon)/self.epsilon_decay_episodes)
-            self.epsilon = self.max_epsilon - epsilon_gradient * (self.global_episode - self.training_episodes + self.epsilon_decay_episodes)
-            self.epsilon = min(self.epsilon, self.max_epsilon)
-            self.epsilon = max(self.epsilon, self.min_epsilon)
-        if self.no_training:
-            self.epsilon = 0.0
+        total_steps = self.global_step_main * self.n_workers
+        #if not self.epsilon_decay_episodes and total_steps > self.start_training:
+        #    self.epsilon_decay_episodes = self.training_episodes - self.global_episode
+        ## calculate epsilon if decay started
+        #if self.epsilon_decay_episodes and total_steps > self.start_training:
+        #    epsilon_gradient = ((self.max_epsilon - self.min_epsilon)/self.epsilon_decay_episodes)
+        #    self.epsilon = self.max_epsilon - epsilon_gradient * (self.global_episode - self.training_episodes + self.epsilon_decay_episodes)
+        #    self.epsilon = min(self.epsilon, self.max_epsilon)
+        #    self.epsilon = max(self.epsilon, self.min_epsilon)
+        #if self.no_training:
+        #    self.epsilon = 0.0
 
         if mode == "greedy":
             actions = self.actor.predict(tf.constant(obs))
@@ -452,12 +466,11 @@ class DDPG(Agent):
             actions = self.actor.noisy_predict(tf.constant(obs))
         elif mode == "random":
             actions = self.actor.random_predict(np.array(obs))
-        elif mode == "eps-greedy-noise":
-            choice = np.random.choice(2, 1, p=[self.epsilon, (1-self.epsilon)])
-            if choice == 0:
+        elif mode == "first_random_then_noise":
+            if total_steps < self.start_training:
+                actions = self.actor.random_predict(np.array(obs))
+            else:
                 actions = self.actor.noisy_predict(tf.constant(obs))
-            if choice == 1:
-                actions = self.actor.predict(tf.constant(obs))
         elif mode == "eps-greedy-random":
             choice = np.random.choice(2, 1, p=[self.epsilon, (1-self.epsilon)])
             if choice == 0:
@@ -469,7 +482,7 @@ class DDPG(Agent):
 
         return actions
 
-    def cal_custom_reward(self, obs, done):
+    def cal_custom_reward_1(self, obs, done):
         finished = (done or ((self.global_step_main+1) % self.episode_length == 0))
         if finished:
             max_precision = 0.01    # 1cm
@@ -483,6 +496,12 @@ class DDPG(Agent):
             return reward
         else:
             return 0.0
+
+    def cal_custom_reward_2(self, done):
+        if done:
+            return 1.0
+        else:
+            return -0.005
 
     def save_all_models(self):
         path_to_dir = os.path.join(self.root_log_dir, "weights", "")
@@ -564,6 +583,5 @@ class DDPG(Agent):
         # shut down all environments
         [q.put(("kill", ())) for q in self.command_queue]
         [worker.join() for worker in self.workers]
-        self.env.shutdown()
         # delete replay buffer (this safes the replay buffer one last time)
         del self.replay_buffer
