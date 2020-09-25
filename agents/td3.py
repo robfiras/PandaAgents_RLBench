@@ -84,17 +84,12 @@ class TD3(DDPG):
         # instantiate the models (if we do not instantiate the model, we can not copy their weights)
         self.critic.build((1, self.dim_inputs_critic))
         self.target_critic.build((1, self.dim_inputs_critic))
-        # check if we need to load weights
-        if self.path_to_model:
-            print("Loading weights from %s to critic..." % self.path_to_model)
-            self.critic.load_weights(os.path.join(self.path_to_model, "critic", "variables", "variables"))
-            self.target_critic.load_weights(os.path.join(self.path_to_model, "critic", "variables", "variables"))
-        else:
-            # copy the weights to the target critic
-            #update_target_variables(self.target_critic.weights, self.critic.weights, tau=1.0)
-            self.target_critic.set_weights(self.critic.get_weights())
         # setup the critic's optimizer
         self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=self.lr_critic)
+
+        # --- copy weights to targets or load old model weights
+        if type(self) == DDPG:
+            self.init_or_load_weights()
 
         TC = tf.keras.callbacks.TensorBoard(log_dir=self.root_log_dir)
         TC.set_model(model=self.actor)
@@ -133,26 +128,21 @@ class TD3(DDPG):
 
         # --- Actor training ---
         self.training_step.assign_add(1)
+        with tf.GradientTape() as tape:
+            next_action = self.actor(states)
+            input_critic = tf.concat([states, next_action], axis=1)
+            actor_loss = -tf.reduce_mean(self.critic(input_critic))
 
-        @tf.function
-        def optimize_actor_and_update_targets():
-            with tf.GradientTape() as tape:
-                next_action = self.actor(states)
-                input_critic = tf.concat([states, next_action], axis=1)
-                act_loss = -tf.reduce_mean(self.critic(input_critic))
+        remainder = tf.math.mod(self.training_step, self.actor_update_frequency)
+        if tf.equal(remainder, 0):
 
             # calculate the gradients and optimize
-            actor_gradients = tape.gradient(act_loss, self.actor.trainable_variables)
+            actor_gradients = tape.gradient(actor_loss, self.actor.trainable_variables)
             self.optimizer_actor.apply_gradients(zip(actor_gradients, self.actor.trainable_variables))
 
             # update targets
             update_target_variables(self.target_critic.weights, self.critic.weights, self.tau)
             update_target_variables(self.target_actor.weights, self.actor.weights, self.tau)
-
-            return act_loss
-
-        remainder = tf.math.mod(self.training_step, self.actor_update_frequency)
-        actor_loss = tf.cond(pred=tf.equal(remainder, 0), true_fn=optimize_actor_and_update_targets, false_fn=tf.no_op)
 
         return critic_loss, actor_loss
 

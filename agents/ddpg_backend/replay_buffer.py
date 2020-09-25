@@ -127,6 +127,8 @@ class ReplayBuffer(object):
                     min(n_samples, self.maxlen)
         cursor.execute(input_str)
         data = np.array(cursor.fetchall())
+        if data.shape[0] == 0:
+            raise ValueError("Buffer is empty! Please check.")
         self.buf[0:data.shape[0], :] = data
         self.length = data.shape[0]
         self.index = self.length - 1

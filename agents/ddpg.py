@@ -151,7 +151,7 @@ class DDPG(Agent):
                  batch_size=64,
                  episode_length=40,
                  training_interval=1,
-                 start_training=500000,
+                 start_training=1000000,
                  min_epsilon=0.2,
                  max_epsilon=0.9,
                  epsilon_decay_episodes=None,
@@ -243,38 +243,25 @@ class DDPG(Agent):
         self.max_actions = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
         self.actor = ActorNetwork(self.layers_actor, self.dim_actions, self.max_actions, sigma=sigma, use_ou_noise=use_ou_noise)
         self.target_actor = ActorNetwork(self.layers_actor,  self.dim_actions, self.max_actions, sigma=sigma, use_ou_noise=use_ou_noise)
-        # instantiate the models (if we do not instantiate the model, we can not copy their weights)
+        # instantiate the models
         self.actor.build((1, self.dim_inputs_actor))
         self.target_actor.build((1, self.dim_inputs_actor))
-        # check if we need to load weights
-        if self.path_to_model:
-            print("Loading weights from %s to actor..." % self.path_to_model)
-            self.actor.load_weights(os.path.join(self.path_to_model, "actor", "variables", "variables"))
-            self.target_actor.load_weights(os.path.join(self.path_to_model, "actor", "variables", "variables"))
-        else:
-            # copy the weights to the target actor
-            #update_target_variables(self.target_actor.weights, self.actor.weights, tau=1.0)
-            self.target_actor.set_weights(self.actor.get_weights())
         # setup the actor's optimizer
         self.optimizer_actor = tf.keras.optimizers.Adam(learning_rate=self.lr_actor)
 
         # --- define the critic and its target ---
-        self.critic = CriticNetwork(self.layers_critic, dim_obs=self.dim_observations, dim_outputs=1)   # one Q-value per state needed
-        self.target_critic = CriticNetwork(self.layers_critic, dim_obs=self.dim_observations, dim_outputs=1)    # one Q-value per state needed
-        # instantiate the models (if we do not instantiate the model, we can not copy their weights)
-        self.critic.build((1, self.dim_inputs_critic))
-        self.target_critic.build((1, self.dim_inputs_critic))
-        # check if we need to load weights
-        if self.path_to_model:
-            print("Loading weights from %s to critic..." % self.path_to_model)
-            self.critic.load_weights(os.path.join(self.path_to_model, "critic", "variables", "variables"))
-            self.target_critic.load_weights(os.path.join(self.path_to_model, "critic", "variables", "variables"))
-        else:
-            # copy the weights to the target critic
-            #update_target_variables(self.target_critic.weights, self.critic.weights, tau=1.0)
-            self.target_critic.set_weights(self.critic.get_weights())
-        # setup the critic's optimizer
-        self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=self.lr_critic)
+        if type(self) == DDPG:
+            self.critic = CriticNetwork(self.layers_critic, dim_obs=self.dim_observations, dim_outputs=1)   # one Q-value per state needed
+            self.target_critic = CriticNetwork(self.layers_critic, dim_obs=self.dim_observations, dim_outputs=1)    # one Q-value per state needed
+            # instantiate the models
+            self.critic.build((1, self.dim_inputs_critic))
+            self.target_critic.build((1, self.dim_inputs_critic))
+            # setup the critic's optimizer
+            self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=self.lr_critic)
+
+        # --- copy weights to targets or load old model weights
+        if type(self) == DDPG:
+            self.init_or_load_weights()
 
     def run(self):
         """ Main run method for incrementing the simulation and training the agent """
@@ -426,10 +413,10 @@ class DDPG(Agent):
         finished_workers = []
         for w, o, a, e in zip(running_workers, obs, action, range(self.n_workers)):
             single_next_obs, single_reward, single_done = w["result_queue"].get()
-            single_reward = self.cal_custom_reward_2(single_done)  # added custom reward
+            single_reward = self.cal_custom_reward_3(single_next_obs, single_done)  # added custom reward
             # single_reward = single_reward*10
             self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
-                                      float(single_done), (e+self.global_episode))
+                                      float(0.0), (e+self.global_episode))      # Note: No done with reward3
             next_obs.append(single_next_obs)
             reward.append(single_reward)
             done.append(single_done)
@@ -499,9 +486,20 @@ class DDPG(Agent):
 
     def cal_custom_reward_2(self, done):
         if done:
-            return 1.0
+            return 10.0
         else:
             return -0.005
+
+    def cal_custom_reward_3(self, obs, done):
+        max_precision = 0.01    # 1cm
+        max_reward = 1/max_precision
+        scale = 0.1
+        gripper_pos = obs[22:25]         # gripper x,y,z
+        target_pos = obs[-3:]        # target x,y,z
+        dist = np.sqrt(np.sum(np.square(np.subtract(target_pos, gripper_pos)), axis=0))     # euclidean norm
+        reward = min((1/(dist + 0.00001)), max_reward)
+        reward = scale * reward
+        return reward
 
     def save_all_models(self):
         path_to_dir = os.path.join(self.root_log_dir, "weights", "")
@@ -509,6 +507,28 @@ class DDPG(Agent):
         # self.target_actor.save(path_to_dir + "target_actor")
         self.critic.save(path_to_dir + "critic")
         # self.target_critic.save(path_to_dir + "target_critic")
+
+    def init_or_load_weights(self):
+        # --- actor
+        # check if we need to load weights
+        if self.path_to_model:
+            print("Loading weights from %s to actor..." % self.path_to_model)
+            self.actor.load_weights(os.path.join(self.path_to_model, "actor", "variables", "variables"))
+            self.target_actor.load_weights(os.path.join(self.path_to_model, "actor", "variables", "variables"))
+        else:
+            # copy the weights to the target actor
+            # update_target_variables(self.target_actor.weights, self.actor.weights, tau=1.0)
+            self.target_actor.set_weights(self.actor.get_weights())
+        # --- critic
+        # check if we need to load weights
+        if self.path_to_model:
+            print("Loading weights from %s to critic..." % self.path_to_model)
+            self.critic.load_weights(os.path.join(self.path_to_model, "critic", "variables", "variables"))
+            self.target_critic.load_weights(os.path.join(self.path_to_model, "critic", "variables", "variables"))
+        else:
+            # copy the weights to the target critic
+            # update_target_variables(self.target_critic.weights, self.critic.weights, tau=1.0)
+            self.target_critic.set_weights(self.critic.get_weights())
 
     @tf.function
     def _compute_td_error(self, states, actions, rewards, next_states, dones):
