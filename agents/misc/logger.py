@@ -16,16 +16,16 @@ class CmdLineLogger:
         self.normalization = normalization
         self.start = time.time()
 
-    def __call__(self, episode, number_of_succ_episodes):
+    def __call__(self, episode, number_of_succ_episodes, percentage_succ):
         if episode % self.logging_interval == 0:
             norm_status = int(episode / (self.training_episodes / self.normalization))
             elapsed_time = time.time() - self.start
             eta = ((self.training_episodes - episode) / self.logging_interval) * elapsed_time
             eta = datetime.timedelta(seconds=eta)
-            print('%d.Episode - Status %.2f %% |%s%s| Number of successful Episodes %d | Time taken for the last %d Episodes: %f sec. | Aprox. Time needed till %s \r' % (
+            print('%d.Episode - Status %.2f %% |%s%s| Number of successful Episodes %d | %.2f%% Successful Episodes | Time taken for the last %d Episodes: %f sec. | Aprox. Time needed till %s \r' % (
                     episode, (episode / self.training_episodes)*100, '#' * norm_status,
-                    "." * (self.normalization - norm_status - 1), number_of_succ_episodes, self.logging_interval,
-                    elapsed_time, str(eta)), end="")
+                    "." * (self.normalization - norm_status - 1), number_of_succ_episodes, percentage_succ,
+                    self.logging_interval, elapsed_time, str(eta)), end="")
 
             self.start = time.time()
 

@@ -10,6 +10,7 @@ from agents.ddpg_backend.target_update_ops import update_target_variables
 from agents.ddpg_backend.replay_buffer import ReplayBuffer
 from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
+from agents.misc.tensorboard_logger import TensorBoardLogger
 from agents.base import Agent
 
 # tf.config.run_functions_eagerly(True)
@@ -151,7 +152,7 @@ class DDPG(Agent):
                  batch_size=100,
                  episode_length=40,
                  training_interval=1,
-                 start_training=500000,
+                 start_training=0,
                  min_epsilon=0.2,
                  max_epsilon=0.9,
                  epsilon_decay_episodes=None,
@@ -229,7 +230,7 @@ class DDPG(Agent):
         # setup tensorboard
         self.summary_writer = None
         if self.use_tensorboard:
-            self.summary_writer = tf.summary.create_file_writer(logdir=self.root_log_dir)
+            self.tensorboard_logger = TensorBoardLogger(root_log_dir=self.root_log_dir)
 
         # setup the replay buffer
         self.replay_buffer = ReplayBuffer(buffer_size,
@@ -278,6 +279,7 @@ class DDPG(Agent):
         done = []
         running_workers = []
         number_of_succ_episodes = 0
+        percentage_succ = 0.0
         step_in_episode = 0
         logger = CmdLineLogger(10, self.training_episodes, self.n_workers)
         while self.global_episode < self.training_episodes:
@@ -293,9 +295,10 @@ class DDPG(Agent):
                     self.global_episode += self.n_workers
                     step_in_episode = 0
 
-                logger(self.global_episode, number_of_succ_episodes)
+                logger(self.global_episode, number_of_succ_episodes, percentage_succ)
 
             # predict action with actor
+            #action = self.get_action(obs, mode="greedy+noise")
             action = self.get_action(obs, mode="greedy+noise")
 
             # make a step in workers
@@ -329,24 +332,11 @@ class DDPG(Agent):
                 self.save_all_models()
 
             # log to tensorboard if needed
-            if self.use_tensorboard:
-                with self.summary_writer.as_default():
-                    # pass logging data to tensorboard
-                    if cond_train:
-                        tf.summary.scalar('Critic-Loss', avg_crit_loss, step=total_steps)
-                        if avg_act_loss:
-                            tf.summary.scalar('Actor-Loss', avg_act_loss, step=total_steps)
-                        tf.summary.scalar('Actor-Loss', avg_act_loss, step=total_steps)
-                    scalar_reward = 0
-                    for r in reward:
-                        scalar_reward += r
-                    tf.summary.scalar('Reward', float(scalar_reward), step=total_steps)
-                    for d in done:
-                        if d > 0.0:
-                            number_of_succ_episodes += 1
-                            tf.summary.scalar('Successful episode length', step_in_episode, step=total_steps)
-                    tf.summary.scalar('Number of successful Episodes', float(number_of_succ_episodes), step=total_steps)
-                    tf.summary.scalar('Epsilon', self.epsilon, step=total_steps)
+            if self.use_tensorboard and cond_train:
+                number_of_succ_episodes, percentage_succ = self.tensorboard_logger(total_steps,self.global_episode,
+                                                                                   {"Critic-Loss": avg_crit_loss,
+                                                                                    "Actor-Loss": avg_act_loss},
+                                                                                   done, step_in_episode, reward)
 
             # increment and save next_obs as obs
             self.global_step_main += 1
