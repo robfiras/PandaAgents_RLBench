@@ -39,7 +39,7 @@ class ReplayBuffer(object):
         if (self.dim_observations is None or self.dim_actions is None) and self.path_to_db_read:
             raise TypeError("You can not read, if no dimensions for the observations and actions are specified.")
 
-        # check if the db fore reading exists
+        # check if the db exists before reading
         if self.path_to_db_read:
             self.path_to_db_read = os.path.join(self.path_to_db_read, "replay_buffer.db")
             if not os.path.exists(self.path_to_db_read):

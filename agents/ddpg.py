@@ -148,17 +148,17 @@ class DDPG(Agent):
                  gamma=0.99,
                  tau=0.001,
                  sigma=0.05,
-                 batch_size=64,
+                 batch_size=100,
                  episode_length=40,
                  training_interval=1,
-                 start_training=1000000,
+                 start_training=500000,
                  min_epsilon=0.2,
                  max_epsilon=0.9,
                  epsilon_decay_episodes=None,
-                 save_weights_interval=400,
+                 save_weights_interval=4000,
                  use_ou_noise=False,
-                 buffer_size=500000,
-                 lr_actor=0.0001,
+                 buffer_size=1000000,
+                 lr_actor=0.001,
                  lr_critic=0.001,
                  layers_actor=[400, 300],
                  layers_critic=[400, 300],
@@ -238,6 +238,12 @@ class DDPG(Agent):
                                           dim_observations=self.dim_observations,
                                           dim_actions=self.dim_actions,
                                           write=self.write_buffer)
+        if self.path_to_read_buffer:
+            if self.replay_buffer.length >= self.start_training:
+                self.start_training = 0
+            else:
+                self.start_training = self.start_training - self.replay_buffer.length
+        print("\n Starting training in %d steps. \n" % self.start_training)
 
         # --- define actor and its target---
         self.max_actions = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
@@ -290,7 +296,7 @@ class DDPG(Agent):
                 logger(self.global_episode, number_of_succ_episodes)
 
             # predict action with actor
-            action = self.get_action(obs, mode="eps-greedy-random")
+            action = self.get_action(obs, mode="greedy+noise")
 
             # make a step in workers
             self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
