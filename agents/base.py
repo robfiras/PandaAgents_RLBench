@@ -151,6 +151,7 @@ class Agent(object):
                    obs_scaling,
                    headless):
 
+        np.random.seed(worker_id)
         env = Environment(action_mode=action_mode, obs_config=obs_config, headless=headless)
         env.launch()
         task = env.get_task(task_class)

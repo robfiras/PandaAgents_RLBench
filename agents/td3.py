@@ -88,7 +88,7 @@ class TD3(DDPG):
         self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=self.lr_critic)
 
         # --- copy weights to targets or load old model weights
-        if type(self) == DDPG:
+        if type(self) == TD3:
             self.init_or_load_weights()
 
         TC = tf.keras.callbacks.TensorBoard(log_dir=self.root_log_dir)

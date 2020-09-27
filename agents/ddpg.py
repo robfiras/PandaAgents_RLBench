@@ -101,7 +101,7 @@ class ActorNetwork(tf.keras.Model):
     def add_gaussian_noise(self, predictions):
         """ adds noise from a normal (Gaussian) distribution """
         noisy_predictions = predictions + tf.random.normal(shape=predictions.shape, mean=self.mu, stddev=self.sigma,
-                                                           dtype=tf.float64, seed=self.seed)
+                                                           dtype=tf.float64)
         return noisy_predictions
 
     def add_ou_noise(self, predictions):
@@ -152,7 +152,7 @@ class DDPG(Agent):
                  batch_size=100,
                  episode_length=40,
                  training_interval=1,
-                 start_training=0,
+                 start_training=500000,
                  min_epsilon=0.2,
                  max_epsilon=0.9,
                  epsilon_decay_episodes=None,
@@ -244,7 +244,9 @@ class DDPG(Agent):
                 self.start_training = 0
             else:
                 self.start_training = self.start_training - self.replay_buffer.length
-        print("\n Starting training in %d steps. \n" % self.start_training)
+        print("\nStarting training in %d steps." % self.start_training)
+        self.n_steps_random_actions = 2*self.start_training
+        print("Making completely random actions for the next %d steps. \n" % self.n_steps_random_actions)
 
         # --- define actor and its target---
         self.max_actions = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
@@ -297,16 +299,19 @@ class DDPG(Agent):
 
                 logger(self.global_episode, number_of_succ_episodes, percentage_succ)
 
+            total_steps = self.global_step_main * self.n_workers
+
             # predict action with actor
-            #action = self.get_action(obs, mode="greedy+noise")
-            action = self.get_action(obs, mode="greedy+noise")
+            if self.n_steps_random_actions > total_steps:
+                action = self.get_action(obs, mode="random")
+            else:
+                action = self.get_action(obs, mode="greedy+noise")
 
             # make a step in workers
             self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
                                  done=done, running_workers=running_workers)
 
             # train if conditions are met
-            total_steps = self.global_step_main * self.n_workers
             cond_train = (total_steps >= self.start_training and
                           self.global_step_main % self.training_interval == 0 and
                           not self.no_training)
@@ -332,11 +337,15 @@ class DDPG(Agent):
                 self.save_all_models()
 
             # log to tensorboard if needed
-            if self.use_tensorboard and cond_train:
-                number_of_succ_episodes, percentage_succ = self.tensorboard_logger(total_steps,self.global_episode,
-                                                                                   {"Critic-Loss": avg_crit_loss,
-                                                                                    "Actor-Loss": avg_act_loss},
-                                                                                   done, step_in_episode, reward)
+            if self.use_tensorboard:
+                number_of_succ_episodes, percentage_succ = self.tensorboard_logger(total_steps=total_steps,
+                                                                                   episode=self.global_episode,
+                                                                                   losses={"Critic-Loss": avg_crit_loss,
+                                                                                           "Actor-Loss": avg_act_loss} if cond_train else None,
+                                                                                   dones=done,
+                                                                                   step_in_episode=step_in_episode,
+                                                                                   rewards=reward,
+                                                                                   cond_train=cond_train)
 
             # increment and save next_obs as obs
             self.global_step_main += 1
@@ -409,10 +418,10 @@ class DDPG(Agent):
         finished_workers = []
         for w, o, a, e in zip(running_workers, obs, action, range(self.n_workers)):
             single_next_obs, single_reward, single_done = w["result_queue"].get()
-            single_reward = self.cal_custom_reward_3(single_next_obs, single_done)  # added custom reward
-            # single_reward = single_reward*10
+            # single_reward = self.cal_custom_reward_3(single_next_obs, single_done)  # added custom reward
+            single_reward = single_reward
             self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
-                                      float(0.0), (e+self.global_episode))      # Note: No done with reward3
+                                      float(single_done), (e+self.global_episode))
             next_obs.append(single_next_obs)
             reward.append(single_reward)
             done.append(single_done)
