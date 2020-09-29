@@ -329,6 +329,7 @@ class DDPG(Agent):
             else:
                 action = self.get_action(obs, mode="eps-greedy-random")
 
+
             # make a step in workers
             self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
                                  done=done, running_workers=running_workers)
