@@ -116,10 +116,13 @@ class TD3(DDPG):
         return tf.squeeze(target_Q - current_Q1), tf.squeeze(target_Q - current_Q2)
 
     @tf.function
-    def train_inner(self, states, actions, rewards, next_states, dones):
+    def train_inner(self, states, actions, rewards, next_states, dones, is_weights=1.0):
         # --- Critic training ---
         with tf.GradientTape() as tape:
             td_errors_q1, td_errors_q2 = self._compute_td_error(states, actions, rewards, next_states, dones)
+            mean_td_errors = (td_errors_q1 + td_errors_q2) / 2
+            td_errors_q1 = td_errors_q1 * is_weights
+            td_errors_q2 = td_errors_q2 * is_weights
             critic_loss = tf.reduce_mean(tf.square(td_errors_q1)) + tf.reduce_mean(tf.square(td_errors_q2))
 
         # calculate the gradients and optimize
@@ -144,5 +147,5 @@ class TD3(DDPG):
             update_target_variables(self.target_critic.weights, self.critic.weights, self.tau)
             update_target_variables(self.target_actor.weights, self.actor.weights, self.tau)
 
-        return critic_loss, actor_loss
+        return critic_loss, actor_loss, mean_td_errors
 

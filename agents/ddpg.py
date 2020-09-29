@@ -7,7 +7,8 @@ import tensorflow as tf
 from rlbench.backend.observation import Observation
 
 from agents.ddpg_backend.target_update_ops import update_target_variables
-from agents.ddpg_backend.replay_buffer import ReplayBuffer
+from agents.ddpg_backend.replay_buffer import ReplayBuffer, ReplayBufferMode
+from agents.ddpg_backend.prio_replay_buffer import PrioReplayBuffer
 from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
 from agents.misc.tensorboard_logger import TensorBoardLogger
@@ -233,20 +234,41 @@ class DDPG(Agent):
             self.tensorboard_logger = TensorBoardLogger(root_log_dir=self.root_log_dir)
 
         # setup the replay buffer
-        self.replay_buffer = ReplayBuffer(buffer_size,
-                                          path_to_db_write=self.root_log_dir,
-                                          path_to_db_read=self.path_to_read_buffer,
-                                          dim_observations=self.dim_observations,
-                                          dim_actions=self.dim_actions,
-                                          write=self.write_buffer)
+        self.replay_buffer_mode = ReplayBufferMode.PER
+        if self.replay_buffer_mode == ReplayBufferMode.VANILLA:
+            self.replay_buffer = ReplayBuffer(buffer_size,
+                                              path_to_db_write=self.root_log_dir,
+                                              path_to_db_read=self.path_to_read_buffer,
+                                              dim_observations=self.dim_observations,
+                                              dim_actions=self.dim_actions,
+                                              write=self.write_buffer)
+        elif self.replay_buffer_mode == ReplayBufferMode.PER:
+            self.replay_buffer = PrioReplayBuffer(buffer_size,
+                                                  path_to_db_write=self.root_log_dir,
+                                                  path_to_db_read=self.path_to_read_buffer,
+                                                  dim_observations=self.dim_observations,
+                                                  dim_actions=self.dim_actions,
+                                                  write=self.write_buffer)
+        elif self.replay_buffer_mode == ReplayBufferMode.HER:
+            print("HER not supported yet. Switching back to vanilla buffer...")
+            self.replay_buffer = ReplayBuffer(buffer_size,
+                                              path_to_db_write=self.root_log_dir,
+                                              path_to_db_read=self.path_to_read_buffer,
+                                              dim_observations=self.dim_observations,
+                                              dim_actions=self.dim_actions,
+                                              write=self.write_buffer)
+        else:
+            raise ValueError("Unsupported replay buffer type. Please choose either vanilla, PER or HER.")
+
         if self.path_to_read_buffer:
             if self.replay_buffer.length >= self.start_training:
                 self.start_training = 0
             else:
                 self.start_training = self.start_training - self.replay_buffer.length
-        print("\nStarting training in %d steps." % self.start_training)
-        self.n_steps_random_actions = 2*self.start_training
-        print("Making completely random actions for the next %d steps. \n" % self.n_steps_random_actions)
+        self.n_steps_random_actions = 2 * self.start_training
+        if not self.no_training:
+            print("\nStarting training in %d steps." % self.start_training)
+            print("Making completely random actions for the next %d steps. \n" % self.n_steps_random_actions)
 
         # --- define actor and its target---
         self.max_actions = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
@@ -302,7 +324,7 @@ class DDPG(Agent):
             total_steps = self.global_step_main * self.n_workers
 
             # predict action with actor
-            if self.n_steps_random_actions > total_steps:
+            if self.n_steps_random_actions > total_steps and not self.no_training:
                 action = self.get_action(obs, mode="random")
             else:
                 action = self.get_action(obs, mode="eps-greedy-random")
@@ -551,7 +573,10 @@ class DDPG(Agent):
 
     def train(self):
         # sample batch
-        states, actions, rewards, next_states, dones = self.replay_buffer.sample_batch(self.batch_size)
+        if self.replay_buffer_mode == ReplayBufferMode.VANILLA or self.replay_buffer_mode == ReplayBufferMode.HER:
+            states, actions, rewards, next_states, dones = self.replay_buffer.sample_batch(self.batch_size)
+        elif self.replay_buffer_mode == ReplayBufferMode.PER:
+            states, actions, rewards, next_states, dones, tree_idxs, is_weights = self.replay_buffer.sample_batch(self.batch_size)
 
         states = tf.constant(states)
         actions = tf.constant(actions)
@@ -560,18 +585,25 @@ class DDPG(Agent):
         dones = tf.constant(dones)
 
         # call the inner function
-        crit_loss, act_loss = self.train_inner(states, actions, rewards, next_states, dones)
+        if self.replay_buffer_mode == ReplayBufferMode.VANILLA or self.replay_buffer_mode == ReplayBufferMode.HER:
+            crit_loss, act_loss, td_errors = self.train_inner(states, actions, rewards, next_states, dones)
+        elif self.replay_buffer_mode == ReplayBufferMode.PER:
+            crit_loss, act_loss, td_errors = self.train_inner(states, actions, rewards, next_states, dones, is_weights)
+            # update prioritized replay buffer
+            self.replay_buffer.update_mult(tree_idxs, td_errors)
+
         return crit_loss, act_loss
 
     @tf.function
-    def train_inner(self, states, actions, rewards, next_states, dones):
+    def train_inner(self, states, actions, rewards, next_states, dones, is_weights=1.0):
         # --- Critic training ---
         with tf.GradientTape() as tape:
             td_errors = self._compute_td_error(states, actions, rewards, next_states, dones)
+            td_errors_is = td_errors * is_weights
 
             # lets use a squared error for errors less than 1 and a linear error for errors greater than 1 to reduce
             # the impact of very large errors
-            critic_loss = tf.reduce_mean(tf.square(td_errors))
+            critic_loss = tf.reduce_mean(tf.square(td_errors_is))
             #td_errors = tf.abs(td_errors)
             #clipped_td_errors = tf.clip_by_value(td_errors, 0.0, 1.0)
             #linear_errors = 2 * (td_errors - clipped_td_errors)
@@ -602,7 +634,7 @@ class DDPG(Agent):
             update_target_variables(self.target_critic.weights, self.critic.weights, self.tau)
             update_target_variables(self.target_actor.weights, self.actor.weights, self.tau)
 
-        return critic_loss, actor_loss
+        return critic_loss, actor_loss, td_errors
 
     def clean_up(self):
         print("Cleaning up ...")

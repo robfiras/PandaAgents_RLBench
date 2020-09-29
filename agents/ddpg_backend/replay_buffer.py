@@ -2,15 +2,23 @@ import errno
 import os
 import sqlite3
 import warnings
-import io
+from enum import Enum
 
 import numpy as np
 
 
+class ReplayBufferMode(Enum):
+    # random sampling buffer
+    VANILLA = 1
+
+    # prioritized experience replay
+    PER = 2
+
+    # hindsight experience replay
+    HER = 3
+
+
 class ReplayBuffer(object):
-    """
-    This replay buffer stores all experiences in a deque and allows to randomly sample experiences from it.
-    """
 
     def __init__(self, maxlen, dim_observations=None, dim_actions=None,
                  path_to_db_read=None, path_to_db_write=None, write=False, save_interval=None):
@@ -26,6 +34,7 @@ class ReplayBuffer(object):
         self.index = 0
         self.length = 0
         self.write = write
+        self.buffer_name = ""
         self.path_to_db_read = path_to_db_read
         self.path_to_db_write = path_to_db_write
         self.dim_observations = dim_observations
@@ -41,7 +50,7 @@ class ReplayBuffer(object):
 
         # check if the db exists before reading
         if self.path_to_db_read:
-            self.path_to_db_read = os.path.join(self.path_to_db_read, "replay_buffer.db")
+            self.path_to_db_read = os.path.join(self.path_to_db_read, self.__class__.__name__)
             if not os.path.exists(self.path_to_db_read):
                 raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), self.path_to_db_read)
 
@@ -51,7 +60,7 @@ class ReplayBuffer(object):
 
         # check if we need to save the buffer during training 
         if self.write:
-            self.path_to_db_write = os.path.join(self.path_to_db_write, "replay_buffer.db")
+            self.path_to_db_write = os.path.join(self.path_to_db_write,  self.__class__.__name__)
 
             # create connection to database and create if it does not exist yet
             self.conn = sqlite3.connect(self.path_to_db_write)
@@ -89,7 +98,7 @@ class ReplayBuffer(object):
         return self.buf[indices]
 
     def sample_batch(self, batch_size):
-        """ Splits a randomly sampled batch into states, actions, rewards, next_states and dones  """
+        """ Splits a randomly sampled batch into states, actions, rewards, next_states and dones """
         data = self.sample(batch_size)
         ind = 2     # first entry is sample_id and second is episode_id
         states = data[:, ind:(self.dim_observations+ind)]
@@ -104,7 +113,7 @@ class ReplayBuffer(object):
         return states, actions, rewards.reshape(-1, 1), next_states, dones.reshape(-1, 1)
 
     def save_buffer(self):
-        """ Saves all samples in the replay buffer, which were appended since last saving"""
+        """ Saves all samples in the replay buffer, which were appended since last saving """
         print("\nSaving replay buffer ...")
         start = self.last_saved_at % self.maxlen
         end = self.number_of_samples_seen % self.maxlen
@@ -119,25 +128,27 @@ class ReplayBuffer(object):
         print("Finished saving.")
 
     def read_buffer(self, n_samples):
-        """ Returns the last n_samples samples from the reply buffer"""
+        """ Returns the last n_samples samples from the replay buffer """
         print("\nReading Buffer from %s ..." % self.path_to_db_read)
         connection = sqlite3.connect(self.path_to_db_read)
         cursor = connection.cursor()
-        input_str = "SELECT * FROM (SELECT * FROM data ORDER BY oid DESC Limit %d) ORDER BY RANDOM()" %\
-                    min(n_samples, self.maxlen)
+        column_names = self.get_column_names()
+        input_str = "SELECT %s FROM (SELECT %s FROM data ORDER BY oid DESC Limit %d) ORDER BY RANDOM()" %\
+                    (column_names, column_names, min(n_samples, self.maxlen))
         cursor.execute(input_str)
         data = np.array(cursor.fetchall())
         if data.shape[0] == 0:
             raise ValueError("Buffer is empty! Please check.")
         self.buf[0:data.shape[0], :] = data
         self.length = data.shape[0]
+        self.number_of_samples_seen = self.length
         self.index = self.length - 1
         self.number_of_samples_seen = self.length
         connection.close()
         print("Finished reading buffer --> %d samples imported.\n" % self.length)
 
     def create_column_names(self):
-        """ Creates a string for defining the columns in a table of a sql database"""
+        """ Creates a string for defining the columns in a table of a sql database """
         column_names = "Sample_ID int,"
         column_names += "Episode_ID int,"
         for var in range(self.dim_observations):
@@ -150,8 +161,23 @@ class ReplayBuffer(object):
         column_names += "Done float"
         return column_names
 
+    def get_column_names(self):
+        """ Creates a string for reading the columns in a table of a sql database
+        Note: Priorities are not included! """
+        column_names = "Sample_ID, "
+        column_names += "Episode_ID, "
+        for var in range(self.dim_observations):
+            column_names += "State_" + str(var) + ", "
+        for var in range(self.dim_actions):
+            column_names += "Action_" + str(var) + ", "
+        column_names += "Reward, "
+        for var in range(self.dim_observations):
+            column_names += "Next_State_" + str(var) + ", "
+        column_names += "Done "
+        return column_names
+
     def create_input_str(self):
-        """ Creates a string for inserting the buffer data into a sql table"""
+        """ Creates a string for inserting the buffer data into a sql table """
         input_str = "("
         for var in range(self.dim_one_sample - 1):
             input_str += "?,"
