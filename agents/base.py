@@ -163,14 +163,14 @@ class Agent(object):
             command_args = command[1]
             if command_type == "reset":
                 descriptions, observation = task.reset()
-                #observation = observation.get_low_dim_data() / obs_scaling
-                observation = observation.get_low_dim_data()
+                observation = observation.get_low_dim_data() / obs_scaling
+                #observation = observation.get_low_dim_data()
                 result_q.put((descriptions, observation))
             elif command_type == "step":
                 actions = command_args[0]
                 next_observation, reward, done = task.step(actions)
-                #next_observation = next_observation.get_low_dim_data() / obs_scaling
-                next_observation = next_observation.get_low_dim_data()
+                next_observation = next_observation.get_low_dim_data() / obs_scaling
+                #next_observation = next_observation.get_low_dim_data()
                 result_q.put((next_observation, reward, done))
             elif command_type == "kill":
                 print("Killing worker %d" % worker_id)
