@@ -143,6 +143,7 @@ class ReplayBuffer(object):
         self.length = data.shape[0]
         self.number_of_samples_seen = self.length
         self.index = self.length - 1
+        self.number_of_samples_seen = self.length
         connection.close()
         print("Finished reading buffer --> %d samples imported.\n" % self.length)
 

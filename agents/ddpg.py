@@ -149,7 +149,7 @@ class DDPG(Agent):
                  task_class,
                  gamma=0.99,
                  tau=0.001,
-                 sigma=0.2,
+                 sigma=0.4,
                  batch_size=100,
                  episode_length=40,
                  training_interval=1,
@@ -326,10 +326,9 @@ class DDPG(Agent):
             # predict action with actor
             if self.n_steps_random_actions > total_steps and not self.no_training:
                 action = self.get_action(obs, mode="random")
-            elif not self.no_training:
-                action = self.get_action(obs, mode="greedy+noise")
             else:
-                action = self.get_action(obs, mode="greedy")
+                action = self.get_action(obs, mode="eps-greedy-random")
+
 
             # make a step in workers
             self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
@@ -369,6 +368,7 @@ class DDPG(Agent):
                                                                                    dones=done,
                                                                                    step_in_episode=step_in_episode,
                                                                                    rewards=reward,
+                                                                                   epsilon=self.epsilon,
                                                                                    cond_train=cond_train)
 
             # increment and save next_obs as obs
@@ -465,16 +465,16 @@ class DDPG(Agent):
         """
         # set epsilon-decay if not set yet
         total_steps = self.global_step_main * self.n_workers
-        #if not self.epsilon_decay_episodes and total_steps > self.start_training:
-        #    self.epsilon_decay_episodes = self.training_episodes - self.global_episode
-        ## calculate epsilon if decay started
-        #if self.epsilon_decay_episodes and total_steps > self.start_training:
-        #    epsilon_gradient = ((self.max_epsilon - self.min_epsilon)/self.epsilon_decay_episodes)
-        #    self.epsilon = self.max_epsilon - epsilon_gradient * (self.global_episode - self.training_episodes + self.epsilon_decay_episodes)
-        #    self.epsilon = min(self.epsilon, self.max_epsilon)
-        #    self.epsilon = max(self.epsilon, self.min_epsilon)
-        #if self.no_training:
-        #    self.epsilon = 0.0
+        if not self.epsilon_decay_episodes and total_steps > self.n_steps_random_actions:
+            self.epsilon_decay_episodes = self.training_episodes - self.global_episode
+        # calculate epsilon if decay started
+        if self.epsilon_decay_episodes and total_steps > self.n_steps_random_actions:
+            epsilon_gradient = ((self.max_epsilon - self.min_epsilon)/self.epsilon_decay_episodes)
+            self.epsilon = self.max_epsilon - epsilon_gradient * (self.global_episode - self.training_episodes + self.epsilon_decay_episodes)
+            self.epsilon = min(self.epsilon, self.max_epsilon)
+            self.epsilon = max(self.epsilon, self.min_epsilon)
+        if self.no_training:
+            self.epsilon = 0.0
 
         if mode == "greedy":
             actions = self.actor.predict(tf.constant(obs))
@@ -492,7 +492,7 @@ class DDPG(Agent):
             if choice == 0:
                 actions = self.actor.random_predict(np.array(obs))
             if choice == 1:
-                actions = self.actor.predict(tf.constant(obs))
+                actions = self.actor.noisy_predict(tf.constant(obs))
         else:
             raise ValueError("%s not allowed as mode! Choose either greedy, greedy+noise or random." % mode)
 
