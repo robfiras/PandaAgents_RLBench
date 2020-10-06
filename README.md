@@ -20,9 +20,30 @@ git clone https://github.com/robfiras/PandaAgents_RLBench
 
 *Note:* This version is tested on Python 3.7.7. Currently it does not work with Python 2 or Python 3.8 or above.
 
+#### Optional
+If you want to use the C++ implementation of prioritized experience replay, you need to build it first.\
+Go to 'agents/ddpg_backend/sum_tree_cpp' and run the build script, which downloads all dependencies and compiles the library:
+```shell script
+cd agents/ddpg_backend/sum_tree_cpp
+sudo chmod u+x build.sh
+./build.sh 
+```
+This will create a the `library sum_tree_cpp.cpython-37m-x86_64-linux-gnu.so`, which you need to either install at\
+a location, which is already in your `PYTHONPATH`, or to add it manually to your `PYTHONPATH`:
+```shell script
+export PYTHONPATH="${PYTHONPATH}:/path/to/your/lib.so"
+```
+If you do so, consider adding the latter to your `.bashrc` file, if you want the path to be added at startup.  
+
+
 ## Currently included Agents and Features
 **Agents**:
 - Deep Deterministic Policy Gradient (DDPG)
+- Twin Delayed DDPG (TD3)
+
+**Features**:
+- Prioritized Experience Replay (PER)
+    - Implemented in Python and C++ (approx. 10-15% performance gain compared to Python implementation)
 
 ### In Progress:
 - Including a ROS-API
@@ -47,8 +68,7 @@ import sys
 from rlbench.action_modes import ArmActionMode, ActionMode
 from rlbench.observation_config import ObservationConfig
 from rlbench.tasks.reach_target import ReachTarget
-from rlbench.environment import Environment
-from agents.ddpg import DDPG
+from agents.td3 import TD3
 
 # set the observation configuration
 obs_config = ObservationConfig()
@@ -62,11 +82,12 @@ obs_config.set_all_low_dim(obs_only_low_dim)
 action_mode = ActionMode(ArmActionMode.ABS_JOINT_VELOCITY)
 
 # create an agent
-agent = DDPG(argv=sys.argv[1:],
-             action_mode=action_mode,
-             obs_config=obs_config,
-             task_class=ReachTarget)
+agent = TD3(argv=sys.argv[1:], action_mode=action_mode, obs_config=obs_config, task_class=ReachTarget)
 
 # run agent
 agent.run()
+```
+Note that you need to specify a logging directory. A reasonable minimal example would be:
+```
+python main.py --log_dir /path/to/your/dir --save_weights
 ```

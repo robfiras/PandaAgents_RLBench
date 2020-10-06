@@ -1,11 +1,16 @@
-import os
 import random
-import sqlite3
+from enum import Enum
 
 from agents.ddpg_backend.replay_buffer import ReplayBuffer
 from agents.ddpg_backend.sum_tree import SumTree
+from sum_tree_cpp import SumTreeCpp
 
 import numpy as np
+
+
+class PrioReplayBufferType(Enum):
+    CPP = 0
+    PYTHON = 1
 
 
 class PrioReplayBuffer(ReplayBuffer):
@@ -14,9 +19,16 @@ class PrioReplayBuffer(ReplayBuffer):
                  path_to_db_read=None, path_to_db_write=None, write=False, save_interval=None):
         # call parent constructor
         super(PrioReplayBuffer, self).__init__(maxlen, dim_observations, dim_actions,
-                                         path_to_db_read, path_to_db_write, write, save_interval)
+                                               path_to_db_read, path_to_db_write, write, save_interval)
+
+        # set type of prio buffer extension -> either C++ or Python
+        self.prio_buffer_type = PrioReplayBufferType.CPP
+
         # init sum_tree storing all priorities
-        self.priority_tree = SumTree(self.maxlen)
+        if self.prio_buffer_type == PrioReplayBufferType.PYTHON:
+            self.priority_tree = SumTree(self.maxlen)
+        elif self.prio_buffer_type == PrioReplayBufferType.CPP:
+            self.priority_tree = SumTreeCpp(self.maxlen)
 
         self.e = 0.001
         self.a = 0.6
@@ -26,7 +38,10 @@ class PrioReplayBuffer(ReplayBuffer):
 
         # initialize priority tree if buffer was read
         if self.path_to_db_read:
-            self.priority_tree[0:self.length] = np.full(self.length, self.max_prio)
+            if self.prio_buffer_type == PrioReplayBufferType.PYTHON:
+                self.priority_tree[0:self.length] = np.full(self.length, self.max_prio)
+            elif self.prio_buffer_type == PrioReplayBufferType.CPP:
+                self.priority_tree.init(self.max_prio)
 
     def append(self, state, action, reward, next_state, done, idx_episode):
         """ Appends the replay buffer with a single sample """
@@ -60,7 +75,12 @@ class PrioReplayBuffer(ReplayBuffer):
             end = segment * (i+1)
 
             s = random.uniform(begin, end)
-            idx, p, data_idx = self.priority_tree.get(s)
+            if self.prio_buffer_type == PrioReplayBufferType.PYTHON:
+                idx, p, data_idx = self.priority_tree.get(s)
+            elif self.prio_buffer_type == PrioReplayBufferType.CPP:
+                p, data_idx = self.priority_tree.get(s)
+                idx = data_idx + self.maxlen - 1
+
             tree_idxs.append(idx)
             data_idxs.append(data_idx)
             priorities.append(p)
@@ -89,11 +109,20 @@ class PrioReplayBuffer(ReplayBuffer):
     def update(self, tree_idx, error):
         p = self.get_priority(error)
         self.max_prio = max(self.max_prio, p)
-        self.priority_tree.update(tree_idx, p)
+        if self.prio_buffer_type == PrioReplayBufferType.PYTHON:
+            self.priority_tree.update(tree_idx, p)
+        elif self.prio_buffer_type == PrioReplayBufferType.CPP:
+            leaf_idx = tree_idx - self.maxlen + 1
+            self.priority_tree.update(leaf_idx, p)
 
     def update_mult(self, tree_idxs, errors):
-        for i, e in zip(tree_idxs, errors):
-            self.update(i, e)
+        priorities = self.get_priority(errors)
+        if self.prio_buffer_type == PrioReplayBufferType.PYTHON:
+            for i, p in zip(tree_idxs, priorities):
+                self.priority_tree.update(i, p)
+        elif self.prio_buffer_type == PrioReplayBufferType.CPP:
+            leaf_idxs = np.array(tree_idxs) - self.maxlen + 1
+            self.priority_tree.update_mult(leaf_idxs, priorities)
 
     def get_priority(self, error):
         return (np.abs(error) + self.e) ** self.a
@@ -109,7 +138,10 @@ class PrioReplayBuffer(ReplayBuffer):
         data = self.buf[start:end]
         tree_start = start + self.maxlen - 1
         tree_end = end + self.maxlen - 1
-        priorities = self.priority_tree.tree[tree_start:tree_end]
+        if self.prio_buffer_type == PrioReplayBufferType.PYTHON:
+            priorities = self.priority_tree.tree[tree_start:tree_end]
+        elif self.prio_buffer_type == PrioReplayBufferType.CPP:
+            priorities = np.array(self.priority_tree.get_leaf_priorities(start, end))
         data = np.concatenate((data, priorities.reshape(len(priorities), 1)), axis=1)
         data_list_of_tuples = map(tuple, data.tolist())
         self.c.executemany('INSERT INTO data VALUES %s' % self.create_input_str(), data_list_of_tuples)

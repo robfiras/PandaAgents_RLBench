@@ -3,8 +3,6 @@ import sys
 from rlbench.action_modes import ArmActionMode, ActionMode
 from rlbench.observation_config import ObservationConfig
 from rlbench.tasks.reach_target import ReachTarget
-from rlbench.environment import Environment
-from agents.ddpg import DDPG
 from agents.td3 import TD3
 
 # set the observation configuration

@@ -149,7 +149,7 @@ class DDPG(Agent):
                  task_class,
                  gamma=0.99,
                  tau=0.001,
-                 sigma=0.05,
+                 sigma=0.2,
                  batch_size=100,
                  episode_length=40,
                  training_interval=1,

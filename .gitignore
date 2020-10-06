@@ -1,10 +1,7 @@
-Bildschirmfoto 2020-08-07 um 12.50.19.png
 .idea/
 .sync/
 *__pycache__*
 *.pyc
-Hands on machine learning.pdf
-Hands-On Machine Learning with Scikit-Learn and TensorFlow.pdf
 run.sh
 run2.sh
 run3.sh
@@ -12,3 +9,9 @@ run_validation.sh
 main_training.py
 run_training.sh
 eval_scripts/eval_action.sh
+
+# sum_tree_cpp
+agents/ddpg_backend/sum_tree_cpp/externals
+agents/ddpg_backend/sum_tree_cpp/build
+agents/ddpg_backend/sum_tree_cpp/CMakeLists.txt.user
+agents/ddpg_backend/sum_tree_cpp/sum_tree_cpp.cpython-37m-x86_64-linux-gnu.so
