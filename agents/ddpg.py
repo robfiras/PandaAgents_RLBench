@@ -12,7 +12,7 @@ from agents.ddpg_backend.prio_replay_buffer import PrioReplayBuffer
 from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
 from agents.misc.tensorboard_logger import TensorBoardLogger
-from agents.base import Agent
+from agents.base_rl import RLAgent
 
 # tf.config.run_functions_eagerly(True)
 tf.keras.backend.set_floatx('float64')
@@ -141,7 +141,7 @@ class CriticNetwork(tf.keras.Model):
         return self.out(z)
 
 
-class DDPG(Agent):
+class DDPG(RLAgent):
     def __init__(self,
                  argv,
                  action_mode,
@@ -157,7 +157,7 @@ class DDPG(Agent):
                  min_epsilon=0.2,
                  max_epsilon=0.9,
                  epsilon_decay_episodes=None,
-                 save_weights_interval=4000,
+                 save_weights_interval=4000,    # save after 4000 steps
                  use_ou_noise=False,
                  buffer_size=1000000,
                  lr_actor=0.001,
@@ -223,11 +223,7 @@ class DDPG(Agent):
             self.training_episodes = 1000   # default value
         if self.save_weights:
             self.save_weights_interval = save_weights_interval
-        # add an custom/unique id for logging
-        if (self.use_tensorboard or self.save_weights) and self.root_log_dir:
-            if not self.run_id:
-                self.run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
-            self.root_log_dir = os.path.join(self.root_log_dir, self.run_id, "")
+
         # setup tensorboard
         self.summary_writer = None
         if self.use_tensorboard:
@@ -328,7 +324,6 @@ class DDPG(Agent):
                 action = self.get_action(obs, mode="random")
             else:
                 action = self.get_action(obs, mode="eps-greedy-random")
-
 
             # make a step in workers
             self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
@@ -639,7 +634,7 @@ class DDPG(Agent):
 
     def clean_up(self):
         print("Cleaning up ...")
-        # shut down all environments
+        # shutdown all environments
         [q.put(("kill", ())) for q in self.command_queue]
         [worker.join() for worker in self.workers]
         # delete replay buffer (this safes the replay buffer one last time)

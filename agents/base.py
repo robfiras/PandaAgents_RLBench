@@ -1,16 +1,13 @@
-import multiprocessing as mp
+import os
 import random
+import time
 
 import numpy as np
 import tensorflow as tf
-from rlbench.backend.observation import Observation
-from rlbench.observation_config import ObservationConfig
-from rlbench.environment import Environment
-from rlbench.sim2real.domain_randomization_environment import DomainRandomizationEnvironment
-from rlbench.action_modes import ActionMode
-from rlbench.sim2real.domain_randomization import RandomizeEvery
 
 from agents.misc.opts_arg_evaluator import eval_opts_args
+from rlbench.observation_config import ObservationConfig
+from rlbench.action_modes import ActionMode
 
 
 class Agent(object):
@@ -52,6 +49,17 @@ class Agent(object):
         self.dim_observations = 40
         self.dim_actions = 8
 
+        # add an custom/unique id for logging
+        if (self.use_tensorboard or self.save_weights) and self.root_log_dir:
+            if not self.run_id:
+                self.run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
+            self.root_log_dir = os.path.join(self.root_log_dir, self.run_id, "")
+
+            # check if dir exists already
+            if not os.path.exists(self.root_log_dir):
+                print("\nCreating new directory: ", self.root_log_dir, "\n")
+                os.mkdir(self.root_log_dir)
+
         # --- set observation limits for scaling
         # gripper open
         self.gripper_open_limits = np.array([1.0])
@@ -87,17 +95,6 @@ class Agent(object):
         if not self.only_low_dim_obs:
             raise ValueError("High-dim observations currently not supported!")
 
-        # multiprocessing stuff
-        self.workers = []
-        self.command_queue = []
-        self.result_queue = []
-        self.run_workers()
-        self.worker_conn = [{"command_queue": cq,
-                             "result_queue": rq,
-                             "index": idx} for cq, rq, idx in zip(self.command_queue,
-                                                                  self.result_queue,
-                                                                  range(self.n_workers))]
-
     @property
     def only_low_dim_obs(self) -> bool:
         """ Returns true, if only low-dim obs are set """
@@ -128,73 +125,3 @@ class Agent(object):
             return True
         else:
             return False
-
-    def run_workers(self):
-        self.command_queue = [mp.Queue() for i in range(self.n_workers)]
-        self.result_queue = [mp.Queue() for i in range(self.n_workers)]
-        self.workers = [mp.Process(target=self.job_worker,
-                                   args=(worker_id,
-                                         self.action_mode,
-                                         self.obs_config,
-                                         self.task_class,
-                                         self.command_queue[worker_id],
-                                         self.result_queue[worker_id],
-                                         self.obs_scaling_vector,
-                                         self.headless),) for worker_id in range(self.n_workers)]
-        for worker in self.workers:
-            worker.start()
-
-    def job_worker(self, worker_id, action_mode,
-                   obs_config, task_class,
-                   command_q: mp.Queue,
-                   result_q: mp.Queue,
-                   obs_scaling,
-                   headless):
-
-        np.random.seed(worker_id)
-        env = Environment(action_mode=action_mode, obs_config=obs_config, headless=headless)
-        env.launch()
-        task = env.get_task(task_class)
-        task.reset()
-        print("Initialized worker %d" % worker_id)
-        while True:
-            command = command_q.get()
-            command_type = command[0]
-            command_args = command[1]
-            if command_type == "reset":
-                descriptions, observation = task.reset()
-                observation = observation.get_low_dim_data() / obs_scaling
-                #observation = observation.get_low_dim_data()
-                result_q.put((descriptions, observation))
-            elif command_type == "step":
-                actions = command_args[0]
-                next_observation, reward, done = task.step(actions)
-                next_observation = next_observation.get_low_dim_data() / obs_scaling
-                #next_observation = next_observation.get_low_dim_data()
-                result_q.put((next_observation, reward, done))
-            elif command_type == "kill":
-                print("Killing worker %d" % worker_id)
-                env.shutdown()
-                break
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

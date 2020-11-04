@@ -4,6 +4,7 @@ from rlbench.action_modes import ArmActionMode, ActionMode
 from rlbench.observation_config import ObservationConfig
 from rlbench.tasks.reach_target import ReachTarget
 from agents.td3 import TD3
+from agents.openai_es import OpenAIES
 
 # set the observation configuration
 obs_config = ObservationConfig()
@@ -17,7 +18,7 @@ obs_config.set_all_low_dim(obs_only_low_dim)
 action_mode = ActionMode(ArmActionMode.ABS_JOINT_VELOCITY)
 
 # create an agent
-agent = TD3(argv=sys.argv[1:], action_mode=action_mode, obs_config=obs_config, task_class=ReachTarget)
+agent = OpenAIES(argv=sys.argv[1:], action_mode=action_mode, obs_config=obs_config, task_class=ReachTarget)
 
 # run agent
 agent.run()
