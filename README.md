@@ -28,7 +28,7 @@ cd agents/ddpg_backend/sum_tree_cpp
 sudo chmod u+x build.sh
 ./build.sh 
 ```
-This will create a the `library sum_tree_cpp.cpython-37m-x86_64-linux-gnu.so`, which you need to either install at\
+This will create a the library `sum_tree_cpp.cpython-37m-x86_64-linux-gnu.so`, which you need to either install at\
 a location, which is already in your `PYTHONPATH`, or to add it manually to your `PYTHONPATH`:
 ```shell script
 export PYTHONPATH="${PYTHONPATH}:/path/to/your/lib.so"
@@ -40,6 +40,7 @@ If you do so, consider adding the latter to your `.bashrc` file, if you want the
 **Agents**:
 - Deep Deterministic Policy Gradient (DDPG)
 - Twin Delayed DDPG (TD3)
+- OpenAI-ES
 
 **Features**:
 - Prioritized Experience Replay (PER)
@@ -52,7 +53,6 @@ If you do so, consider adding the latter to your `.bashrc` file, if you want the
 **Agents**:
 - PI² 
 - CMA-ES
-- OpenAI-ES
 - A2C
 
 **Features**:
