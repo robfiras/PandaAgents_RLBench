@@ -16,7 +16,7 @@ class OpenAIES(ESAgent):
                  obs_config,
                  task_class,
                  episode_length=40,
-                 n_descendants=2,
+                 n_descendants=8,
                  lr=0.01,
                  sigma=0.05,
                  layers_network=[400, 300],

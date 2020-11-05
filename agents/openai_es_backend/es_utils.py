@@ -9,7 +9,7 @@ from rlbench.backend.observation import Observation
 from agents.base_es import Network
 
 # tf.config.run_functions_eagerly(True)
-
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 class ESOptimizer(tf.Module):
     def __init__(self, model, learning_rate, momentum=0.9, name=None):
