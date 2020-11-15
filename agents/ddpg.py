@@ -1,10 +1,8 @@
 import os
-import time
-import datetime
+import sys
 
 import numpy as np
 import tensorflow as tf
-from rlbench.backend.observation import Observation
 
 from agents.ddpg_backend.target_update_ops import update_target_variables
 from agents.ddpg_backend.replay_buffer import ReplayBuffer, ReplayBufferMode
@@ -13,6 +11,7 @@ from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
 from agents.misc.tensorboard_logger import TensorBoardLogger
 from agents.base_rl import RLAgent
+import agents.misc.utils as utils
 
 # tf.config.run_functions_eagerly(True)
 tf.keras.backend.set_floatx('float64')
@@ -143,86 +142,49 @@ class CriticNetwork(tf.keras.Model):
 
 class DDPG(RLAgent):
     def __init__(self,
-                 argv,
                  action_mode,
                  obs_config,
                  task_class,
-                 gamma=0.99,
-                 tau=0.001,
-                 sigma=0.4,
-                 batch_size=100,
-                 episode_length=40,
-                 training_interval=1,
-                 start_training=500000,
-                 min_epsilon=0.2,
-                 max_epsilon=0.9,
-                 epsilon_decay_episodes=None,
-                 save_weights_interval=4000,    # save after 4000 steps
-                 use_ou_noise=False,
-                 buffer_size=1000000,
-                 lr_actor=0.001,
-                 lr_critic=0.001,
-                 layers_actor=[400, 300],
-                 layers_critic=[400, 300],
-                 seed=94
-                 ):
-        """
-        :param obs_config: configuration of the observation
-        :param gamma: discount factor
-        :param tau: hyperparameter soft target updates
-        :param sigma: standard deviation for noise
-        :param batch_size: batch size to be sampled from the buffer
-        :param episode_length: length of an episode
-        :param training_interval: intervals used for training (default==1 -> train ech step)
-        :param start_training: step at which training is started
-        :param min_epsilon: minimum epsilon used for eps-greedy policy
-        :param max_epsilon: maximum epsilon used for eps-greedy policy
-        :param epsilon_decay_episodes: episodes within epsilon should be decayed to min_epsilon. Note: Decaying starts when
-        starting training! And if epsilon_decay_episodes=None, min_epsilon is reached at end of training
-        :param save_weights_interval: interval in which the weights are saved
-        :param use_ou_noise: if true, Ornstein-Uhlenbeck noise is used instead of Gaussian noise
-        :param buffer_size: size of the replay buffer
-        :param lr_actor: learning rate actor
-        :param lr_critic: learning rate critic
-        :param layers_actor: number of units in each dense layer in the actor (len of list defines number of layers)
-        :param layers_critic: number of units in each dense layer in the actor (len of list defines number of layers)
-        """
+                 agent_config_path=None):
 
         # call parent constructor
-        super(DDPG, self).__init__(action_mode, task_class, obs_config, argv, seed)
+        super(DDPG, self).__init__(action_mode, task_class, obs_config, agent_config_path)
 
         # define the dimensions
         self.dim_inputs_actor = self.dim_observations
         self.dim_inputs_critic = self.dim_observations + self.dim_actions
 
         # setup the some hyperparameters
-        self.gamma = gamma
-        self.tau = tau
-        self.sigma = sigma
-        self.batch_size = batch_size
-        self.episode_length = episode_length
-        self.training_interval = training_interval
-        self.start_training = start_training
-        self.max_epsilon = max_epsilon
-        self.min_epsilon = min_epsilon
-        self.epsilon = max_epsilon
-        self.epsilon_decay_episodes = epsilon_decay_episodes
+        hparams = self.cfg["DDPG"]["Hyperparameters"]
+        self.gamma = hparams["gamma"]
+        self.tau = hparams["tau"]
+        self.sigma = hparams["sigma"]
+        self.batch_size = hparams["batch_size"]
+        self.training_interval = hparams["training_interval"]
+        self.max_epsilon = hparams["max_epsilon"]
+        self.min_epsilon = hparams["min_epsilon"]
+        self.epsilon = self.max_epsilon
+        self.epsilon_decay_episodes = hparams["epsilon_decay_episodes"]
+        self.layers_actor = hparams["layers_actor"]
+        self.layers_critic = hparams["layers_critic"]
+        self.lr_actor = hparams["lr_actor"]
+        self.lr_critic = hparams["lr_critic"]
+
+        # some DDQN specific setups
+        setup = self.cfg["DDPG"]["Setup"]
+        self.start_training = setup["start_training"]
+        self.use_ou_noise = setup["use_ou_noise"]
+        self.use_target_copying = setup["use_target_copying"]
+        self.interval_copy_target = setup["interval_copy_target"]
         self.global_step_main = 0
         self.global_episode = 0
-        self.use_ou_noise = use_ou_noise
-        self.layers_actor = layers_actor
-        self.layers_critic = layers_critic
-        self.lr_actor = lr_actor
-        self.lr_critic = lr_critic
-
-        # use copying instead of "soft" updates
-        self.use_target_copying = True
-        self.interval_copy_target = 300
-
-        if not self.training_episodes:
-            self.training_episodes = 1000   # default value
-        if self.save_weights:
-            self.save_weights_interval = save_weights_interval
+        self.write_buffer = setup["write_buffer"]
+        self.path_to_read_buffer = None
+        if setup["read_buffer_id"]:
+            self.path_to_read_buffer = os.path.join(self.root_log_dir, setup["read_buffer_id"], "")
+            if not os.path.exists(self.path_to_read_buffer):
+                raise FileNotFoundError("The given path to the read database's directory does not exists: %s" %
+                                        self.path_to_read_buffer)
 
         # setup tensorboard
         self.summary_writer = None
@@ -232,14 +194,14 @@ class DDPG(RLAgent):
         # setup the replay buffer
         self.replay_buffer_mode = ReplayBufferMode.PER
         if self.replay_buffer_mode == ReplayBufferMode.VANILLA:
-            self.replay_buffer = ReplayBuffer(buffer_size,
+            self.replay_buffer = ReplayBuffer(setup["buffer_size"],
                                               path_to_db_write=self.root_log_dir,
                                               path_to_db_read=self.path_to_read_buffer,
                                               dim_observations=self.dim_observations,
                                               dim_actions=self.dim_actions,
                                               write=self.write_buffer)
         elif self.replay_buffer_mode == ReplayBufferMode.PER:
-            self.replay_buffer = PrioReplayBuffer(buffer_size,
+            self.replay_buffer = PrioReplayBuffer(setup["buffer_size"],
                                                   path_to_db_write=self.root_log_dir,
                                                   path_to_db_read=self.path_to_read_buffer,
                                                   dim_observations=self.dim_observations,
@@ -247,7 +209,7 @@ class DDPG(RLAgent):
                                                   write=self.write_buffer)
         elif self.replay_buffer_mode == ReplayBufferMode.HER:
             print("HER not supported yet. Switching back to vanilla buffer...")
-            self.replay_buffer = ReplayBuffer(buffer_size,
+            self.replay_buffer = ReplayBuffer(setup["buffer_size"],
                                               path_to_db_write=self.root_log_dir,
                                               path_to_db_read=self.path_to_read_buffer,
                                               dim_observations=self.dim_observations,
@@ -262,14 +224,13 @@ class DDPG(RLAgent):
             else:
                 self.start_training = self.start_training - self.replay_buffer.length
         self.n_steps_random_actions = 2 * self.start_training
-        if not self.no_training:
+        if self.mode == "online_training":
             print("\nStarting training in %d steps." % self.start_training)
             print("Making completely random actions for the next %d steps. \n" % self.n_steps_random_actions)
 
         # --- define actor and its target---
-        self.max_actions = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-        self.actor = ActorNetwork(self.layers_actor, self.dim_actions, self.max_actions, sigma=sigma, use_ou_noise=use_ou_noise)
-        self.target_actor = ActorNetwork(self.layers_actor,  self.dim_actions, self.max_actions, sigma=sigma, use_ou_noise=use_ou_noise)
+        self.actor = ActorNetwork(self.layers_actor, self.dim_actions, self.max_actions, sigma=self.sigma, use_ou_noise=self.use_ou_noise)
+        self.target_actor = ActorNetwork(self.layers_actor,  self.dim_actions, self.max_actions, sigma=self.sigma, use_ou_noise=self.use_ou_noise)
         # instantiate the models
         self.actor.build((1, self.dim_inputs_actor))
         self.target_actor.build((1, self.dim_inputs_actor))
@@ -291,9 +252,23 @@ class DDPG(RLAgent):
             self.init_or_load_weights()
 
     def run(self):
+        if self.mode == "online_training":
+            self.run_online_training()
+        elif self.mode == "offline_training":
+            self.run_offline_training()
+        elif self.mode == "validation":
+            if not self.path_to_model:
+                question = "You have not set a path to model. Do you really want to validate a random model?"
+                if not utils.query_yes_no(question):
+                    print("Terminating ...")
+                    sys.exit()
+            self.run_validation(self.actor)
+        else:
+            raise ValueError("%\ns mode is not supported in DDPG!\n")
+
+    def run_online_training(self):
         """ Main run method for incrementing the simulation and training the agent """
         obs = []
-        action = []
         reward = []
         next_obs = []
         done = []
@@ -301,7 +276,7 @@ class DDPG(RLAgent):
         number_of_succ_episodes = 0
         percentage_succ = 0.0
         step_in_episode = 0
-        logger = CmdLineLogger(10, self.training_episodes, self.n_workers)
+        logger = CmdLineLogger(self.logging_interval, self.training_episodes, self.n_workers)
         while self.global_episode < self.training_episodes:
             # reset episode if maximal length is reached or all worker are done
             if self.global_step_main % self.episode_length == 0 or not running_workers:
@@ -320,7 +295,7 @@ class DDPG(RLAgent):
             total_steps = self.global_step_main * self.n_workers
 
             # predict action with actor
-            if self.n_steps_random_actions > total_steps and not self.no_training:
+            if self.n_steps_random_actions > total_steps:
                 action = self.get_action(obs, mode="random")
             else:
                 action = self.get_action(obs, mode="eps-greedy-random")
@@ -329,12 +304,7 @@ class DDPG(RLAgent):
             self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
                                  done=done, running_workers=running_workers)
 
-            # train if conditions are met
-            cond_train = (total_steps >= self.start_training and
-                          self.global_step_main % self.training_interval == 0 and
-                          not self.no_training)
-
-            if cond_train:
+            if total_steps >= self.start_training and self.global_step_main % self.training_interval == 0:
                 avg_crit_loss = 0
                 avg_act_loss = 0
                 worker_training_actors = 0
@@ -359,12 +329,11 @@ class DDPG(RLAgent):
                 number_of_succ_episodes, percentage_succ = self.tensorboard_logger(total_steps=total_steps,
                                                                                    episode=self.global_episode,
                                                                                    losses={"Critic-Loss": avg_crit_loss,
-                                                                                           "Actor-Loss": avg_act_loss} if cond_train else None,
+                                                                                           "Actor-Loss": avg_act_loss},
                                                                                    dones=done,
                                                                                    step_in_episode=step_in_episode,
                                                                                    rewards=reward,
-                                                                                   epsilon=self.epsilon,
-                                                                                   cond_train=cond_train)
+                                                                                   epsilon=self.epsilon)
 
             # increment and save next_obs as obs
             self.global_step_main += 1
@@ -377,7 +346,7 @@ class DDPG(RLAgent):
         self.clean_up()
         print('\nDone.\n')
 
-    def run_training_only(self):
+    def run_offline_training(self):
         """ Runs only the training methods without connecting to the simulation. Reading replay buffer needed! """
         if not self.path_to_read_buffer:
             raise AttributeError("Can not run training only if no buffer is provided! Please provide buffer.")

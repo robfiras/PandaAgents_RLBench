@@ -1,53 +1,73 @@
 import os
 import random
 import time
+import sys
 
 import numpy as np
 import tensorflow as tf
+import yaml
 
-from agents.misc.opts_arg_evaluator import eval_opts_args
+import agents.misc.utils as utils
+from agents.misc.logger import CmdLineLogger
+from agents.misc.success_evaluator import SuccessEvaluator
 from rlbench.observation_config import ObservationConfig
 from rlbench.action_modes import ActionMode
+from rlbench.environment import Environment
+
 
 
 class Agent(object):
 
-    def __init__(self, action_mode: ActionMode, task_class, obs_config: ObservationConfig, argv, seed=94):
+    def __init__(self, action_mode: ActionMode, task_class, obs_config: ObservationConfig, agent_config_path):
 
-        # parse arguments
-        self.argv = argv
-        options = eval_opts_args(argv)
-        self.root_log_dir = options["root_dir"]
-        self.use_tensorboard = options["use_tensorboard"]
-        self.save_weights = options["save_weights"]
-        self.run_id = options["run_id"]
-        self.path_to_model = options["path_to_model"]
-        self.training_episodes = options["training_episodes"]
-        self.no_training = options["no_training"]
-        self.path_to_read_buffer = options["path_to_read_buffer"]
-        self.write_buffer = options["write_buffer"]
-        self.n_workers = options["n_worker"]
-        self.headless = options["headless"]
+        # read config file
+        self.cfg = None
+        if not agent_config_path:
+            question = "No config-file path provided. Do you really want to continue with the default config-file?"
+            if not utils.query_yes_no(question):
+                print("Terminating ...")
+                sys.exit()
+            agent_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config ", "default_config.yaml")
+        with open(agent_config_path, "r") as stream:
+            self.cfg = yaml.safe_load(stream)
 
-        # non-headless mode only allowed, if one worker is set.
-        if self.n_workers == 1 and not self.headless:
-            self.headless = False
+        # setup some general parameters
+        setup = self.cfg["Agent"]["Setup"]
+        valid_modes = ["online_training", "offline_training", "validation"]
+        if setup["mode"] in valid_modes:
+            self.mode = setup["mode"]
         else:
-            self.headless = True
+            raise ValueError("Mode %s not supported." % self.mode)
+        self.root_log_dir = setup["root_log_dir"]
+        self.use_tensorboard = setup["use_tensorboard"]
+        self.save_weights = setup["save_weights"]
+        self.save_weights_interval = setup["save_weights_interval"]
+        self.run_id = setup["run_id"]
+        self.load_model_run_id = setup["load_model_run_id"]
+        self.headless = setup["headless"]
+        self.seed = setup["seed"]
+        self.training_episodes = setup["episodes"]
+        self.episode_length = setup["episode_length"]
+        self.scale_observations = setup["scale_observations"]
+        self.scale_actions = setup["scale_actions"]
+        self.logging_interval = setup["logging_interval"]
+        if self.load_model_run_id:
+            self.path_to_model = os.path.join(self.root_log_dir, self.load_model_run_id)
+        else:
+            self.path_to_model = None
 
         self.action_mode = action_mode
         self.task_class = task_class
         self.obs_config = obs_config
 
         # set seed of random and numpy
-        self.seed = seed
         random.seed(self.seed)
         np.random.seed(self.seed)
         tf.random.set_seed(self.seed)
 
         # set dimensions
-        self.dim_observations = 40
-        self.dim_actions = 8
+        self.dim_observations = self.cfg["Robot"]["Dimensions"]["observations"]
+        self.dim_actions = self.cfg["Robot"]["Dimensions"]["actions"]
 
         # add an custom/unique id for logging
         if (self.use_tensorboard or self.save_weights) and self.root_log_dir:
@@ -60,40 +80,80 @@ class Agent(object):
                 print("\nCreating new directory: ", self.root_log_dir, "\n")
                 os.mkdir(self.root_log_dir)
 
-        # --- set observation limits for scaling
+        # --- set observation and action limits for scaling
+        robot_limits = self.cfg["Robot"]["Limits"]
+        # max actions
+        self.max_actions = robot_limits["actions"]
         # gripper open
-        self.gripper_open_limits = np.array([1.0])
+        self.gripper_open_limits = np.array(robot_limits["gripper_open"])
         # joint velocity limits
-        self.joint_vel_limits = np.array([2.175, 2.175, 2.175, 2.175, 2.609, 2.609, 2.609])     # upper velocity limits taken from panda model
+        self.joint_vel_limits = np.array(robot_limits["joint_vel"])
         # joint position -> max in pos/neg direction defines limit (for symmetric scaling)
-        self.lower_joint_pos_limits_deg = [-166.0, -101.0, -166.0, -176.0, -166.0, -1.0, -166.0]  # min joint pos [°] taken from panda model
-        self.range_joint_pos_deg = [332.0, 202.0, 332.0, 172.0, 332.0, 216.0, 332.0]    # range joint pos [°] taken from panda model
+        self.lower_joint_pos_limits_deg = robot_limits["lower_joint_pos"]
+        self.range_joint_pos_deg = robot_limits["range_joint_pos"]
         self.lower_joint_pos_limits_rad = (np.array(self.lower_joint_pos_limits_deg)/360.0)*2*np.pi
         self.range_joint_pos_rad = (np.array(self.range_joint_pos_deg)/360.0)*2*np.pi
         self.upper_joint_pos_limits_rad = self.lower_joint_pos_limits_rad + self.range_joint_pos_rad
         self.joint_pos_limits_rad = np.amax((np.abs(self.lower_joint_pos_limits_rad), self.upper_joint_pos_limits_rad), axis=0)
         # joint forces
-        self.joint_force_limits = np.array([87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0])
+        self.joint_force_limits = np.array(robot_limits["joint_force"])
         # gripper pose -> first 3 entry are x,y,z and rest are quaternions
-        self.gripper_pose_limits = np.array([3.0, 3.0, 3.0, 1.0, 1.0, 1.0, 1.0])
+        self.gripper_pose_limits = np.array(robot_limits["gripper_pose"])
         # gripper joint position
-        self.gripper_joint_pos_limits = np.array([0.08, 0.08])
+        self.gripper_joint_pos_limits = np.array(robot_limits["gripper_pos"])
         # gripper touch forces -> 2* x,y,z
-        self.gripper_force_limits = np.array([20.0, 20.0, 20.0, 20.0, 20.0, 20.0])
+        self.gripper_force_limits = np.array(robot_limits["gripper_force"])
         # low dim task -> here for reach target
-        self.low_dim_task_limits = np.array([3.0, 3.0, 3.0])
+        self.low_dim_task_limits = np.array(robot_limits["low_dim_task"])
         # concatenate to scaling vector
-        self.obs_scaling_vector = np.concatenate((self.gripper_open_limits,
-                                                  self.joint_vel_limits,
-                                                  self.joint_pos_limits_rad,
-                                                  self.joint_force_limits,
-                                                  self.gripper_pose_limits,
-                                                  self.gripper_joint_pos_limits,
-                                                  self.gripper_force_limits,
-                                                  self.low_dim_task_limits))
+        if self.scale_observations:
+            self.obs_scaling_vector = np.concatenate((self.gripper_open_limits,
+                                                      self.joint_vel_limits,
+                                                      self.joint_pos_limits_rad,
+                                                      self.joint_force_limits,
+                                                      self.gripper_pose_limits,
+                                                      self.gripper_joint_pos_limits,
+                                                      self.gripper_force_limits,
+                                                      self.low_dim_task_limits))
+        else:
+            self.obs_scaling_vector = None
 
         if not self.only_low_dim_obs:
             raise ValueError("High-dim observations currently not supported!")
+
+    def run_validation(self, model):
+        """ Runs validation for presentation purposes
+        :param model: Tensorflow model for action prediction
+        """
+        env = Environment(action_mode=self.action_mode, obs_config=self.obs_config, headless=False)
+        env.launch()
+        task = env.get_task(self.task_class)
+        task.reset()
+        print("Initialized Environment for validation")
+        observation = None
+        episode = 0
+        step = 0
+        logger = CmdLineLogger(self.logging_interval, self.training_episodes, 1)
+        evaluator = SuccessEvaluator()
+        while episode < self.training_episodes:
+            # reset episode if maximal length is reached or all worker are done
+            if step % self.episode_length == 0:
+                descriptions, observation = task.reset()
+                if self.obs_scaling_vector:
+                    observation = observation.get_low_dim_data() / self.obs_scaling_vector
+                else:
+                    observation = observation.get_low_dim_data()
+                logger(episode, evaluator.successful_episodes, evaluator.successful_episodes_perc)
+                step = 0
+                episode += 1
+
+            actions = model.predict(tf.constant([observation]))
+            next_observation, reward, done = task.step(actions)
+            evaluator.add(episode, done)
+            observation = next_observation
+            step += 1
+        env.shutdown()
+        print("\nDone.\n")
 
     @property
     def only_low_dim_obs(self) -> bool:

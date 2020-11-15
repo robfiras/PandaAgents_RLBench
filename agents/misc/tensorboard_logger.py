@@ -8,13 +8,11 @@ class TensorBoardLogger:
         self.summary_writer = tf.summary.create_file_writer(logdir=self.root_log_dir)
         self.evaluator = SuccessEvaluator()
 
-    def __call__(self, total_steps, episode, losses, dones=None, step_in_episode=None,
-                 rewards=None, epsilon=None, cond_train=False):
+    def __call__(self, total_steps, episode, losses, dones=None, step_in_episode=None, rewards=None, epsilon=None):
         with self.summary_writer.as_default():
-            if cond_train:
-                for name, value in losses.items():
-                    if value:
-                        tf.summary.scalar(name, value, step=total_steps)
+            for name, value in losses.items():
+                if value:
+                    tf.summary.scalar(name, value, step=total_steps)
 
             if rewards:
                 tf.summary.scalar('Reward', sum(rewards), step=total_steps)

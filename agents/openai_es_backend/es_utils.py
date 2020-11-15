@@ -51,19 +51,8 @@ def job_descendant(descendant_id,
                    headless,
                    save_weights,
                    save_weights_interval,
-                   root_log_dir):
-
-    # setup save interval
-    if n_descendants_abs <= save_weights_interval:
-        remainder = save_weights_interval % n_descendants_abs
-        if remainder != 0:
-            print("\nLengthening the saving interval from %d to %d.\n" % (save_weights_interval, save_weights_interval+remainder))
-            save_weights_interval += remainder
-    else:
-        remainder = n_descendants_abs % save_weights_interval
-        if remainder != 0:
-            print("\nLengthening the saving interval from %d to %d.\n" % (save_weights_interval, save_weights_interval+remainder))
-            save_weights_interval += remainder
+                   root_log_dir,
+                   path_to_model):
 
     # setup the environment
     env = Environment(action_mode=action_mode, obs_config=obs_config, headless=headless)
@@ -85,6 +74,11 @@ def job_descendant(descendant_id,
     rollout_model.set_weights(training_model.get_weights())
     # setup an optimizer
     optimizer = ESOptimizer(rollout_model, lr)
+
+    if path_to_model:
+        print("\nReading model from ", path_to_model, "...\n")
+        training_model.load_weights(os.path.join(path_to_model, "variables", "variables"))
+        rollout_model.load_weights(os.path.join(path_to_model, "variables", "variables"))
 
     # create a different Generator for each  descendant
     generators = [tf.random.Generator.from_seed(s) for s in noise_seeds]
@@ -232,12 +226,6 @@ def cumulative_update(model, generators, optimizer, rank, utility, sigma, signs,
 
     # update the weights of the training model
     optimizer.apply_gradients(weights, cumulative_updates)
-
-
-
-
-
-
 
 
 

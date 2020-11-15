@@ -4,13 +4,28 @@ import tensorflow as tf
 from rlbench.observation_config import ObservationConfig
 from rlbench.action_modes import ActionMode
 from agents.base import Agent
+import agents.misc.utils as utils
 
 
 class ESAgent(Agent):
 
-    def __init__(self, action_mode: ActionMode, task_class, obs_config: ObservationConfig, argv, seed=94):
+    def __init__(self, action_mode: ActionMode, task_class, obs_config: ObservationConfig, agent_config_path):
         # call parent constructor
-        super(ESAgent, self).__init__(action_mode, task_class, obs_config, argv, seed)
+        super(ESAgent, self).__init__(action_mode, task_class, obs_config, agent_config_path)
+
+        # setup some parameters
+        hparams = self.cfg["ESAgent"]["Hyperparameters"]
+        self.global_episode = 0
+        self.n_descendants = hparams["n_descendants"]
+        self.n_descendants_abs = 2*self.n_descendants    # 2* because we use mirrored sampling
+        self.lr = hparams["lr"]
+        self.sigma = hparams["sigma"]
+        self.layers_network = hparams["layers_network"]
+        if self.n_descendants_abs > 1 and not self.headless:
+            print("Turning headless mode on, since more than one descendant is running.")
+            self.headless = True
+        if self.save_weights:
+            self.save_weights_interval = utils.adjust_save_interval(self.save_weights_interval, self.n_descendants)
 
 
 class Network(tf.keras.Model):

@@ -1,3 +1,5 @@
+import os
+import sys
 import multiprocessing as mp
 
 import numpy as np
@@ -6,36 +8,19 @@ from agents.base_es import ESAgent, Network
 from agents.misc.logger import CmdLineLogger
 from agents.misc.success_evaluator import SuccessEvaluator
 from agents.openai_es_backend.es_utils import job_descendant, tb_logger_job
+import agents.misc.utils as utils
 
 
 class OpenAIES(ESAgent):
 
     def __init__(self,
-                 argv,
                  action_mode,
                  obs_config,
                  task_class,
-                 episode_length=40,
-                 n_descendants=8,
-                 lr=0.01,
-                 sigma=0.05,
-                 layers_network=[400, 300],
-                 save_weights_interval=10,  # save after 10 episodes
-                 seed=94):
+                 agent_config_path):
 
         # call parent constructor
-        super(OpenAIES, self).__init__(action_mode, task_class, obs_config, argv, seed)
-
-        # setup parameters
-        self.global_episode = 0
-        self.episode_length = episode_length
-        self.n_descendants = n_descendants
-        self.n_descendants_abs = 2*n_descendants    # 2* because we use mirrored sampling
-        self.lr = lr
-        self.sigma = sigma
-        self.save_weights_interval = save_weights_interval
-        self.layers_network = layers_network
-        self.max_actions = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        super(OpenAIES, self).__init__(action_mode, task_class, obs_config, agent_config_path)
 
         # setup utilization
         rank = np.arange(1, self.n_descendants_abs+1)
@@ -79,7 +64,8 @@ class OpenAIES(ESAgent):
                                                                     self.headless,
                                                                     self.save_weights,
                                                                     self.save_weights_interval,
-                                                                    self.root_log_dir)) for i in range(self.n_descendants_abs)]
+                                                                    self.root_log_dir,
+                                                                    self.path_to_model)) for i in range(self.n_descendants_abs)]
 
         # we need to setup a separate Tensorboard thread since tf can not be
         # imported in the main thread due to multiprocessing
@@ -89,6 +75,24 @@ class OpenAIES(ESAgent):
                                                                     self.tb_queue))
 
     def run(self):
+        if self.mode == "online_training":
+            self.run_online_training()
+        elif self.mode == "validation":
+            validation_model = Network(self.layers_network, self.dim_actions, self.max_actions)
+            validation_model.build((1, self.dim_observations))
+            if not self.path_to_model:
+                question = "You have not set a path to model. Do you really want to validate a random model?"
+                if not utils.query_yes_no(question):
+                    print("Terminating ...")
+                    sys.exit()
+            else:
+                print("\nReading model from ", self.path_to_model, "...\n")
+                validation_model.load_weights(os.path.join(self.path_to_model, "variables", "variables"))
+            self.run_validation(validation_model)
+        else:
+            raise ValueError("\n%s mode not supported in OpenAI-ES.\n")
+
+    def run_online_training(self):
         logger = CmdLineLogger(4, self.training_episodes, self.n_descendants_abs)
         evaluator = SuccessEvaluator()
 

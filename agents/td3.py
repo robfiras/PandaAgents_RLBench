@@ -56,10 +56,10 @@ class CriticNetwork(tf.keras.Model):
 
 class TD3(DDPG):
     def __init__(self,
-                 argv,
                  action_mode,
                  obs_config,
                  task_class,
+                 agent_config_path=None,
                  actor_noise_clipping=0.5,
                  actor_update_frequency=2
                  ):
@@ -68,7 +68,8 @@ class TD3(DDPG):
         """
 
         # call parent constructor
-        super(TD3, self).__init__(argv=argv, action_mode=action_mode, task_class=task_class, obs_config=obs_config)
+        super(TD3, self).__init__(action_mode=action_mode, task_class=task_class,
+                                  obs_config=obs_config, agent_config_path=agent_config_path)
         self.policy_stddev = self.sigma
         self.actor_noise_clipping = actor_noise_clipping
         self.actor_update_frequency = actor_update_frequency

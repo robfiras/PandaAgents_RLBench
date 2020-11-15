@@ -1,0 +1,144 @@
+# --- DO NOT MODIFY THIS FILE -> MAKE A COPY OF IT TO MAKE YOUR OWN CONFIGURATION ---
+
+# used by all agents
+Agent:
+  Setup:
+    mode: online_training # either "online_training", "offline_training" or "validation"
+    root_log_dir: null  # main logging directory, where models, tensorboard logs and buffers are saved
+    run_id: null  # if not set, default run_id with time stamp is created
+    load_model_run_id: null # run_id of the model in root_log_dir, whose parameters should be read
+    use_tensorboard: no
+    save_weights: no
+    headless: no
+    save_weights_interval: 10 # save every 10 episodes
+    seed: 94
+    episodes: 250000
+    episode_length: 40
+    logging_interval: 10
+    scale_observations: yes
+    scale_actions: yes
+
+# config for all RL agents
+RLAgent:
+  Setup:
+    n_worker: 4
+
+# config for DDPG agents
+DDPG:
+  Setup:
+    read_buffer_id: null # run_id of the model, whose buffer should be read
+    write_buffer: yes
+    use_target_copying: yes # use target copying instead of "soft" updates
+    interval_copy_target: 300
+    start_training: 500000  # steps before training starts
+    buffer_size: 1000000
+    use_ou_noise: no # use ou noise instead of Gaussian noise
+
+  Hyperparamters:
+    gamma: 0.99
+    tau: 0.001
+    sigma: 0.4
+    batch_size: 100
+    training_interval: 1  # interval of training -> 1 = train in each step
+    min_epsilon: 0.2
+    max_epsilon: 0.9
+    epsilon_decay_episodes: null # episodes in which epsilon decay from max to min. If not set, all training episodes
+    lr_actor: 0.001
+    lr_critic: 0.001
+    layers_actor:
+      - 400
+      - 300
+    layers_critic:
+      - 400
+      - 300
+    # only for TD3:
+    actor_noise_clipping: 0.5
+    actor_update_frequence: 2
+
+# config for all ES agents
+ESAgent:
+  Hyperparameters:
+    n_descendants: 8
+    lr: 0.01
+    sigma: 0.05
+    layers_network:
+      - 400
+      - 300
+
+# some Panda specific parameters
+Robot:
+  Dimensions:
+    observations: 40
+    actions: 8
+  Limits:
+    joint_vel:
+      - 2.175
+      - 2.175
+      - 2.175
+      - 2.175
+      - 2.609
+      - 2.609
+      - 2.609
+    lower_joint_pos:
+      - -166.0
+      - -101.0
+      - -166.0
+      - -176.0
+      - -166.0
+      - -1.0
+      - -166.0
+    range_joint_pos:
+      - 332.0
+      - 202.0
+      - 332.0
+      - 172.0
+      - 332.0
+      - 216.0
+      - 332.0
+    joint_force:
+      - 87.0
+      - 87.0
+      - 87.0
+      - 87.0
+      - 12.0
+      - 12.0
+      - 12.0
+    gripper_pose:
+      - 3.0
+      - 3.0
+      - 3.0
+      - 3.0
+      - 1.0
+      - 1.0
+      - 1.0
+    gripper_pos:
+      - 0.08
+      - 0.08
+    gripper_force:
+      - 20.0
+      - 20.0
+      - 20.0
+      - 20.0
+      - 20.0
+      - 20.0
+    gripper_open:
+      - 1.0
+    low_dim_task:
+      - 3.0
+      - 3.0
+      - 3.0
+    actions:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+
+
+
+
+
+
+

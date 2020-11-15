@@ -6,20 +6,28 @@ from rlbench.environment import Environment
 from rlbench.action_modes import ActionMode
 
 from agents.base import Agent
+import agents.misc.utils as utils
 
 
 class RLAgent(Agent):
 
-    def __init__(self, action_mode: ActionMode, task_class, obs_config: ObservationConfig, argv, seed=94):
+    def __init__(self, action_mode: ActionMode, task_class, obs_config: ObservationConfig, agent_config_path):
 
         # call parent constructor
-        super(RLAgent, self).__init__(action_mode, task_class, obs_config, argv, seed)
+        super(RLAgent, self).__init__(action_mode, task_class, obs_config, agent_config_path)
 
         # multiprocessing stuff
         self.workers = []
         self.command_queue = []
         self.result_queue = []
-        self.run_workers()
+        self.n_workers = self.cfg["RLAgent"]["Setup"]["n_workers"]
+        if self.n_workers > 1 and not self.headless:
+            print("Turning headless mode on, since more than one worker is  running.")
+            self.headless = True
+        if self.save_weights:
+            self.save_weights_interval = utils.adjust_save_interval(self.save_weights_interval, self.n_workers)
+        if self.mode == "online_training":
+            self.run_workers()
         self.worker_conn = [{"command_queue": cq,
                              "result_queue": rq,
                              "index": idx} for cq, rq, idx in zip(self.command_queue,
@@ -37,7 +45,7 @@ class RLAgent(Agent):
                                          self.command_queue[worker_id],
                                          self.result_queue[worker_id],
                                          self.obs_scaling_vector,
-                                         self.headless),) for worker_id in range(self.n_workers)]
+                                         self.headless)) for worker_id in range(self.n_workers)]
         for worker in self.workers:
             worker.start()
 
@@ -60,14 +68,18 @@ class RLAgent(Agent):
             command_args = command[1]
             if command_type == "reset":
                 descriptions, observation = task.reset()
-                observation = observation.get_low_dim_data() / obs_scaling
-                #observation = observation.get_low_dim_data()
+                if obs_scaling:
+                    observation = observation.get_low_dim_data() / obs_scaling
+                else:
+                    observation = observation.get_low_dim_data()
                 result_q.put((descriptions, observation))
             elif command_type == "step":
                 actions = command_args[0]
                 next_observation, reward, done = task.step(actions)
-                next_observation = next_observation.get_low_dim_data() / obs_scaling
-                #next_observation = next_observation.get_low_dim_data()
+                if obs_scaling:
+                    next_observation = next_observation.get_low_dim_data() / obs_scaling
+                else:
+                    next_observation = next_observation.get_low_dim_data()
                 result_q.put((next_observation, reward, done))
             elif command_type == "kill":
                 print("Killing worker %d" % worker_id)
