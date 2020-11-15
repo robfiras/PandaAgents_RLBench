@@ -5,9 +5,7 @@ import sys
 
 import numpy as np
 import tensorflow as tf
-import yaml
 
-import agents.misc.utils as utils
 from agents.misc.logger import CmdLineLogger
 from agents.misc.success_evaluator import SuccessEvaluator
 from rlbench.observation_config import ObservationConfig
@@ -15,21 +13,11 @@ from rlbench.action_modes import ActionMode
 from rlbench.environment import Environment
 
 
-
 class Agent(object):
 
-    def __init__(self, action_mode: ActionMode, task_class, obs_config: ObservationConfig, agent_config_path):
+    def __init__(self, action_mode: ActionMode, obs_config: ObservationConfig, task_class, agent_config):
 
-        # read config file
-        self.cfg = None
-        if not agent_config_path:
-            question = "No config-file path provided. Do you really want to continue with the default config-file?"
-            if not utils.query_yes_no(question):
-                print("Terminating ...")
-                sys.exit()
-            agent_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config ", "default_config.yaml")
-        with open(agent_config_path, "r") as stream:
-            self.cfg = yaml.safe_load(stream)
+        self.cfg = agent_config
 
         # setup some general parameters
         setup = self.cfg["Agent"]["Setup"]
@@ -139,7 +127,7 @@ class Agent(object):
             # reset episode if maximal length is reached or all worker are done
             if step % self.episode_length == 0:
                 descriptions, observation = task.reset()
-                if self.obs_scaling_vector:
+                if self.obs_scaling_vector is not None:
                     observation = observation.get_low_dim_data() / self.obs_scaling_vector
                 else:
                     observation = observation.get_low_dim_data()
@@ -147,10 +135,10 @@ class Agent(object):
                 step = 0
                 episode += 1
 
-            actions = model.predict(tf.constant([observation]))
+            actions = np.squeeze(model.predict(tf.constant([observation])))
             next_observation, reward, done = task.step(actions)
             evaluator.add(episode, done)
-            observation = next_observation
+            observation = next_observation.get_low_dim_data()
             step += 1
         env.shutdown()
         print("\nDone.\n")

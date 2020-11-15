@@ -16,13 +16,16 @@ class PrioReplayBufferType(Enum):
 class PrioReplayBuffer(ReplayBuffer):
 
     def __init__(self, maxlen, dim_observations=None, dim_actions=None,
-                 path_to_db_read=None, path_to_db_write=None, write=False, save_interval=None):
+                 path_to_db_read=None, path_to_db_write=None, write=False, save_interval=None, use_cpp=False):
         # call parent constructor
         super(PrioReplayBuffer, self).__init__(maxlen, dim_observations, dim_actions,
                                                path_to_db_read, path_to_db_write, write, save_interval)
 
         # set type of prio buffer extension -> either C++ or Python
-        self.prio_buffer_type = PrioReplayBufferType.CPP
+        if use_cpp:
+            self.prio_buffer_type = PrioReplayBufferType.CPP
+        else:
+            self.prio_buffer_type = PrioReplayBufferType.PYTHON
 
         # init sum_tree storing all priorities
         if self.prio_buffer_type == PrioReplayBufferType.PYTHON:

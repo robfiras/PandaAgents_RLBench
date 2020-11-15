@@ -59,7 +59,7 @@ class TD3(DDPG):
                  action_mode,
                  obs_config,
                  task_class,
-                 agent_config_path=None,
+                 agent_config,
                  actor_noise_clipping=0.5,
                  actor_update_frequency=2
                  ):
@@ -68,8 +68,8 @@ class TD3(DDPG):
         """
 
         # call parent constructor
-        super(TD3, self).__init__(action_mode=action_mode, task_class=task_class,
-                                  obs_config=obs_config, agent_config_path=agent_config_path)
+        super(TD3, self).__init__(action_mode, obs_config, task_class, agent_config)
+
         self.policy_stddev = self.sigma
         self.actor_noise_clipping = actor_noise_clipping
         self.actor_update_frequency = actor_update_frequency
@@ -88,13 +88,13 @@ class TD3(DDPG):
         # setup the critic's optimizer
         self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=self.lr_critic)
 
-        # --- copy weights to targets or load old model weights
+        # --- copy weights to targets or load old model weights ---
         if type(self) == TD3:
             self.init_or_load_weights()
 
-        TC = tf.keras.callbacks.TensorBoard(log_dir=self.root_log_dir)
-        TC.set_model(model=self.actor)
-        TC.set_model(model=self.critic)
+        #TC = tf.keras.callbacks.TensorBoard(log_dir=self.root_log_dir)
+        #TC.set_model(model=self.actor)
+        #TC.set_model(model=self.critic)
 
     @tf.function
     def _compute_td_error(self, states, actions, rewards, next_states, dones):

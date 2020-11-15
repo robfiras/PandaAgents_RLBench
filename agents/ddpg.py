@@ -5,7 +5,7 @@ import numpy as np
 import tensorflow as tf
 
 from agents.ddpg_backend.target_update_ops import update_target_variables
-from agents.ddpg_backend.replay_buffer import ReplayBuffer, ReplayBufferMode
+from agents.ddpg_backend.replay_buffer import ReplayBuffer
 from agents.ddpg_backend.prio_replay_buffer import PrioReplayBuffer
 from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
@@ -145,10 +145,10 @@ class DDPG(RLAgent):
                  action_mode,
                  obs_config,
                  task_class,
-                 agent_config_path=None):
+                 agent_config):
 
         # call parent constructor
-        super(DDPG, self).__init__(action_mode, task_class, obs_config, agent_config_path)
+        super(DDPG, self).__init__(action_mode, obs_config, task_class, agent_config)
 
         # define the dimensions
         self.dim_inputs_actor = self.dim_observations
@@ -186,37 +186,33 @@ class DDPG(RLAgent):
                 raise FileNotFoundError("The given path to the read database's directory does not exists: %s" %
                                         self.path_to_read_buffer)
 
-        # setup tensorboard
-        self.summary_writer = None
-        if self.use_tensorboard:
-            self.tensorboard_logger = TensorBoardLogger(root_log_dir=self.root_log_dir)
-
         # setup the replay buffer
-        self.replay_buffer_mode = ReplayBufferMode.PER
-        if self.replay_buffer_mode == ReplayBufferMode.VANILLA:
+        self.replay_buffer_mode = setup["replay_buffer_mode"]
+        if self.replay_buffer_mode == "VANILLA":
             self.replay_buffer = ReplayBuffer(setup["buffer_size"],
                                               path_to_db_write=self.root_log_dir,
                                               path_to_db_read=self.path_to_read_buffer,
                                               dim_observations=self.dim_observations,
                                               dim_actions=self.dim_actions,
                                               write=self.write_buffer)
-        elif self.replay_buffer_mode == ReplayBufferMode.PER:
+        elif self.replay_buffer_mode == "PER_PYTHON":
             self.replay_buffer = PrioReplayBuffer(setup["buffer_size"],
                                                   path_to_db_write=self.root_log_dir,
                                                   path_to_db_read=self.path_to_read_buffer,
                                                   dim_observations=self.dim_observations,
                                                   dim_actions=self.dim_actions,
-                                                  write=self.write_buffer)
-        elif self.replay_buffer_mode == ReplayBufferMode.HER:
-            print("HER not supported yet. Switching back to vanilla buffer...")
-            self.replay_buffer = ReplayBuffer(setup["buffer_size"],
-                                              path_to_db_write=self.root_log_dir,
-                                              path_to_db_read=self.path_to_read_buffer,
-                                              dim_observations=self.dim_observations,
-                                              dim_actions=self.dim_actions,
-                                              write=self.write_buffer)
+                                                  write=self.write_buffer,
+                                                  use_cpp=False)
+        elif self.replay_buffer_mode == "PER_CPP":
+            self.replay_buffer = PrioReplayBuffer(setup["buffer_size"],
+                                                  path_to_db_write=self.root_log_dir,
+                                                  path_to_db_read=self.path_to_read_buffer,
+                                                  dim_observations=self.dim_observations,
+                                                  dim_actions=self.dim_actions,
+                                                  write=self.write_buffer,
+                                                  use_cpp=True)
         else:
-            raise ValueError("Unsupported replay buffer type. Please choose either vanilla, PER or HER.")
+            raise ValueError("Unsupported replay buffer type. Please choose either VANILLA, PER_PYTHON or PER_CPP.")
 
         if self.path_to_read_buffer:
             if self.replay_buffer.length >= self.start_training:
@@ -227,6 +223,11 @@ class DDPG(RLAgent):
         if self.mode == "online_training":
             print("\nStarting training in %d steps." % self.start_training)
             print("Making completely random actions for the next %d steps. \n" % self.n_steps_random_actions)
+
+        # setup tensorboard
+        self.summary_writer = None
+        if self.use_tensorboard:
+            self.tensorboard_logger = TensorBoardLogger(root_log_dir=self.root_log_dir)
 
         # --- define actor and its target---
         self.actor = ActorNetwork(self.layers_actor, self.dim_actions, self.max_actions, sigma=self.sigma, use_ou_noise=self.use_ou_noise)
@@ -247,7 +248,7 @@ class DDPG(RLAgent):
             # setup the critic's optimizer
             self.optimizer_critic = tf.keras.optimizers.Adam(learning_rate=self.lr_critic)
 
-        # --- copy weights to targets or load old model weights
+        # --- copy weights to targets or load old model weights ---
         if type(self) == DDPG:
             self.init_or_load_weights()
 
@@ -437,8 +438,6 @@ class DDPG(RLAgent):
             self.epsilon = self.max_epsilon - epsilon_gradient * (self.global_episode - self.training_episodes + self.epsilon_decay_episodes)
             self.epsilon = min(self.epsilon, self.max_epsilon)
             self.epsilon = max(self.epsilon, self.min_epsilon)
-        if self.no_training:
-            self.epsilon = 0.0
 
         if mode == "greedy":
             actions = self.actor.predict(tf.constant(obs))
@@ -538,9 +537,9 @@ class DDPG(RLAgent):
 
     def train(self):
         # sample batch
-        if self.replay_buffer_mode == ReplayBufferMode.VANILLA or self.replay_buffer_mode == ReplayBufferMode.HER:
+        if self.replay_buffer_mode == "VANILLA":
             states, actions, rewards, next_states, dones = self.replay_buffer.sample_batch(self.batch_size)
-        elif self.replay_buffer_mode == ReplayBufferMode.PER:
+        elif self.replay_buffer_mode == "PER_PYTHON" or self.replay_buffer_mode == "PER_CPP":
             states, actions, rewards, next_states, dones, tree_idxs, is_weights = self.replay_buffer.sample_batch(self.batch_size)
 
         states = tf.constant(states)
@@ -550,9 +549,9 @@ class DDPG(RLAgent):
         dones = tf.constant(dones)
 
         # call the inner function
-        if self.replay_buffer_mode == ReplayBufferMode.VANILLA or self.replay_buffer_mode == ReplayBufferMode.HER:
+        if self.replay_buffer_mode == "VANILLA":
             crit_loss, act_loss, td_errors = self.train_inner(states, actions, rewards, next_states, dones)
-        elif self.replay_buffer_mode == ReplayBufferMode.PER:
+        elif self.replay_buffer_mode == "PER_PYTHON" or self.replay_buffer_mode == "PER_CPP":
             crit_loss, act_loss, td_errors = self.train_inner(states, actions, rewards, next_states, dones, is_weights)
             # update prioritized replay buffer
             self.replay_buffer.update_mult(tree_idxs, td_errors)

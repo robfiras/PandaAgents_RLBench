@@ -10,6 +10,8 @@ from agents.base_es import Network
 
 # tf.config.run_functions_eagerly(True)
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+tf.keras.backend.set_floatx('float64')
+
 
 class ESOptimizer(tf.Module):
     def __init__(self, model, learning_rate, momentum=0.9, name=None):
@@ -77,8 +79,8 @@ def job_descendant(descendant_id,
 
     if path_to_model:
         print("\nReading model from ", path_to_model, "...\n")
-        training_model.load_weights(os.path.join(path_to_model, "variables", "variables"))
-        rollout_model.load_weights(os.path.join(path_to_model, "variables", "variables"))
+        training_model.load_weights(os.path.join(path_to_model, "weights", "variables", "variables"))
+        rollout_model.load_weights(os.path.join(path_to_model,  "weights", "variables", "variables"))
 
     # create a different Generator for each  descendant
     generators = [tf.random.Generator.from_seed(s) for s in noise_seeds]

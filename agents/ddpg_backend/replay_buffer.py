@@ -7,17 +7,6 @@ from enum import Enum
 import numpy as np
 
 
-class ReplayBufferMode(Enum):
-    # random sampling buffer
-    VANILLA = 1
-
-    # prioritized experience replay
-    PER = 2
-
-    # hindsight experience replay
-    HER = 3
-
-
 class ReplayBuffer(object):
 
     def __init__(self, maxlen, dim_observations=None, dim_actions=None,

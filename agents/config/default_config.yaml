@@ -2,6 +2,23 @@
 
 # used by all agents
 Agent:
+  Type: OpenAIES # either DDPG, TD3 or OpenAIES (more coming soon)
+  ArmActionMode: ABS_JOINT_VELOCITY # c.f., rlbench to see available arm action modes
+  GripperActionMode: OPEN_AMOUNT  # c.f., rlbench to see available gripper action modes
+  Observations:
+    left_shoulder_camera: null  # not supported yet
+    right_shoulder_camera: null # not supported yet
+    wrist_camera: null  # not supported yet
+    front_camera: null  # not supported yet
+    joint_velocities: yes
+    joint_positions: yes
+    joint_forces: yes
+    gripper_open: yes
+    gripper_pose: yes
+    gripper_joint_positions: yes
+    gripper_touch_forces: yes
+    record_gripper_closing: no
+    task_low_dim_state: yes
   Setup:
     mode: online_training # either "online_training", "offline_training" or "validation"
     root_log_dir: null  # main logging directory, where models, tensorboard logs and buffers are saved
@@ -12,29 +29,31 @@ Agent:
     headless: no
     save_weights_interval: 10 # save every 10 episodes
     seed: 94
-    episodes: 250000
+    episodes: 40
     episode_length: 40
     logging_interval: 10
     scale_observations: yes
     scale_actions: yes
+  Task: ReachTarget # until now only ReachTarget (more coming soon)
 
 # config for all RL agents
 RLAgent:
   Setup:
-    n_worker: 4
+    n_workers: 4
 
 # config for DDPG agents
 DDPG:
   Setup:
     read_buffer_id: null # run_id of the model, whose buffer should be read
-    write_buffer: yes
+    write_buffer: no
+    replay_buffer_mode: VANILLA # either VANILLA, PER_PYTHON or PER_CPP (more coming soon)
     use_target_copying: yes # use target copying instead of "soft" updates
     interval_copy_target: 300
     start_training: 500000  # steps before training starts
     buffer_size: 1000000
     use_ou_noise: no # use ou noise instead of Gaussian noise
 
-  Hyperparamters:
+  Hyperparameters:
     gamma: 0.99
     tau: 0.001
     sigma: 0.4

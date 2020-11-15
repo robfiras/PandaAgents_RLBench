@@ -17,10 +17,10 @@ class OpenAIES(ESAgent):
                  action_mode,
                  obs_config,
                  task_class,
-                 agent_config_path):
+                 agent_config):
 
         # call parent constructor
-        super(OpenAIES, self).__init__(action_mode, task_class, obs_config, agent_config_path)
+        super(OpenAIES, self).__init__(action_mode, obs_config, task_class, agent_config)
 
         # setup utilization
         rank = np.arange(1, self.n_descendants_abs+1)
@@ -87,13 +87,13 @@ class OpenAIES(ESAgent):
                     sys.exit()
             else:
                 print("\nReading model from ", self.path_to_model, "...\n")
-                validation_model.load_weights(os.path.join(self.path_to_model, "variables", "variables"))
+                validation_model.load_weights(os.path.join(self.path_to_model,  "weights", "variables", "variables"))
             self.run_validation(validation_model)
         else:
             raise ValueError("\n%s mode not supported in OpenAI-ES.\n")
 
     def run_online_training(self):
-        logger = CmdLineLogger(4, self.training_episodes, self.n_descendants_abs)
+        logger = CmdLineLogger(self.logging_interval, self.training_episodes, self.n_descendants_abs)
         evaluator = SuccessEvaluator()
 
         # start all threads

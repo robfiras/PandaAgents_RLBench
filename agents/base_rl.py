@@ -11,10 +11,10 @@ import agents.misc.utils as utils
 
 class RLAgent(Agent):
 
-    def __init__(self, action_mode: ActionMode, task_class, obs_config: ObservationConfig, agent_config_path):
+    def __init__(self, action_mode: ActionMode, obs_config: ObservationConfig, task_class, agent_config):
 
         # call parent constructor
-        super(RLAgent, self).__init__(action_mode, task_class, obs_config, agent_config_path)
+        super(RLAgent, self).__init__(action_mode, obs_config, task_class, agent_config)
 
         # multiprocessing stuff
         self.workers = []
@@ -68,7 +68,7 @@ class RLAgent(Agent):
             command_args = command[1]
             if command_type == "reset":
                 descriptions, observation = task.reset()
-                if obs_scaling:
+                if obs_scaling is not None:
                     observation = observation.get_low_dim_data() / obs_scaling
                 else:
                     observation = observation.get_low_dim_data()
@@ -76,7 +76,7 @@ class RLAgent(Agent):
             elif command_type == "step":
                 actions = command_args[0]
                 next_observation, reward, done = task.step(actions)
-                if obs_scaling:
+                if obs_scaling is not None:
                     next_observation = next_observation.get_low_dim_data() / obs_scaling
                 else:
                     next_observation = next_observation.get_low_dim_data()

@@ -9,9 +9,9 @@ import agents.misc.utils as utils
 
 class ESAgent(Agent):
 
-    def __init__(self, action_mode: ActionMode, task_class, obs_config: ObservationConfig, agent_config_path):
+    def __init__(self, action_mode: ActionMode,  obs_config: ObservationConfig, task_class, agent_config):
         # call parent constructor
-        super(ESAgent, self).__init__(action_mode, task_class, obs_config, agent_config_path)
+        super(ESAgent, self).__init__(action_mode, obs_config, task_class, agent_config)
 
         # setup some parameters
         hparams = self.cfg["ESAgent"]["Hyperparameters"]
