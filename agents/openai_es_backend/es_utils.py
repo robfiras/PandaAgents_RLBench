@@ -5,8 +5,8 @@ import tensorflow as tf
 import numpy as np
 
 from rlbench.environment import Environment
-from rlbench.backend.observation import Observation
 from agents.base_es import Network
+from agents.misc.custom_rewards import euclidean_distance_reward
 
 # tf.config.run_functions_eagerly(True)
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
@@ -187,18 +187,6 @@ def tb_logger_job(root_log_dir, tb_queue):
             break
         else:
             raise ValueError("Sent command ", command, " for TensorBoard Logger not supported!")
-
-
-def euclidean_distance_reward(obs: Observation):
-    max_precision = 0.01    # 1cm
-    max_reward = 1/max_precision
-    scale = 0.1
-    gripper_pos = obs.gripper_pose[0:3]         # gripper x,y,z
-    target_pos = obs.task_low_dim_state         # target x,y,z
-    dist = np.sqrt(np.sum(np.square(np.subtract(target_pos, gripper_pos)), axis=0))     # euclidean norm
-    reward = min((1/(dist + 0.00001)), max_reward)
-    reward = scale * reward
-    return reward
 
 
 def sign(k_id):

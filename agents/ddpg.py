@@ -11,6 +11,7 @@ from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
 from agents.misc.tensorboard_logger import TensorBoardLogger
 from agents.base_rl import RLAgent
+from agents.misc.custom_rewards import euclidean_distance_reward_vec
 import agents.misc.utils as utils
 
 # tf.config.run_functions_eagerly(True)
@@ -407,7 +408,7 @@ class DDPG(RLAgent):
         finished_workers = []
         for w, o, a, e in zip(running_workers, obs, action, range(self.n_workers)):
             single_next_obs, single_reward, single_done = w["result_queue"].get()
-            # single_reward = self.cal_custom_reward_3(single_next_obs, single_done)  # added custom reward
+            #single_reward = euclidean_distance_reward_vec(single_next_obs)  # added custom reward
             single_reward = single_reward
             self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
                                       float(single_done), (e+self.global_episode))
@@ -455,38 +456,6 @@ class DDPG(RLAgent):
             raise ValueError("%s not allowed as mode! Choose either greedy, greedy+noise, random or eps-greedy-random." % mode)
 
         return actions
-
-    def cal_custom_reward_1(self, obs, done):
-        finished = (done or ((self.global_step_main+1) % self.episode_length == 0))
-        if finished:
-            max_precision = 0.01    # 1cm
-            max_reward = 1/max_precision
-            scale = 1.0
-            gripper_pos = obs[22:25]         # gripper x,y,z
-            target_pos = obs[-3:]        # target x,y,z
-            dist = np.sqrt(np.sum(np.square(np.subtract(target_pos, gripper_pos)), axis=0))     # euclidean norm
-            reward = min((1/(dist + 0.00001)), max_reward)
-            reward = scale * reward
-            return reward
-        else:
-            return 0.0
-
-    def cal_custom_reward_2(self, done):
-        if done:
-            return 10.0
-        else:
-            return -0.005
-
-    def cal_custom_reward_3(self, obs, done):
-        max_precision = 0.01    # 1cm
-        max_reward = 1/max_precision
-        scale = 0.1
-        gripper_pos = obs[22:25]         # gripper x,y,z
-        target_pos = obs[-3:]        # target x,y,z
-        dist = np.sqrt(np.sum(np.square(np.subtract(target_pos, gripper_pos)), axis=0))     # euclidean norm
-        reward = min((1/(dist + 0.00001)), max_reward)
-        reward = scale * reward
-        return reward
 
     def save_all_models(self):
         path_to_dir = os.path.join(self.root_log_dir, "weights", "")
