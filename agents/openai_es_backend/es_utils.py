@@ -102,20 +102,20 @@ def job_descendant(descendant_id,
             perturbate_weights(rollout_model, rollout_generator, sigma, sign(descendant_id))
 
             ''' 2. Run an entire episode using the perturbated rollout network '''
-            cum_reward = 0
+            episode_reward = 0
             _, obs = task.reset()
             for i in range(episode_length):
                 action = rollout_model.predict(tf.constant([obs.get_low_dim_data()]))
                 obs, reward, done = task.step(np.squeeze(action))
-                cum_reward += euclidean_distance_reward(obs)
                 if done:
+                    episode_reward = euclidean_distance_reward(obs)
                     break
 
             ''' 3. Add reward to reward shared memory to tell other workers about our reward and 
                 read the rewards of other descendants as well '''
             # add our reward to shm
             lock.acquire()
-            reward_shm[descendant_id] = cum_reward
+            reward_shm[descendant_id] = episode_reward
             finished_reward_writing.value += 1
             if finished_reward_writing.value == n_descendants_abs:
                 start_reading_rewards.set()
