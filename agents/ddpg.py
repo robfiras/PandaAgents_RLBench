@@ -445,11 +445,6 @@ class DDPG(RLAgent):
             actions = self.actor.noisy_predict(tf.constant(obs))
         elif mode == "random":
             actions = self.actor.random_predict(np.array(obs))
-        elif mode == "first_random_then_noise":
-            if total_steps < self.n_steps_random_actions:
-                actions = self.actor.random_predict(np.array(obs))
-            else:
-                actions = self.actor.noisy_predict(tf.constant(obs))
         elif mode == "eps-greedy-random":
             choice = np.random.choice(2, 1, p=[self.epsilon, (1-self.epsilon)])
             if choice == 0:
@@ -457,7 +452,7 @@ class DDPG(RLAgent):
             if choice == 1:
                 actions = self.actor.noisy_predict(tf.constant(obs))
         else:
-            raise ValueError("%s not allowed as mode! Choose either greedy, greedy+noise or random." % mode)
+            raise ValueError("%s not allowed as mode! Choose either greedy, greedy+noise, random or eps-greedy-random." % mode)
 
         return actions
 
