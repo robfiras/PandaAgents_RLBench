@@ -37,7 +37,6 @@ class Agent(object):
         self.training_episodes = setup["episodes"]
         self.episode_length = setup["episode_length"]
         self.scale_observations = setup["scale_observations"]
-        self.scale_actions = setup["scale_actions"]
         self.logging_interval = setup["logging_interval"]
         if self.load_model_run_id:
             self.path_to_model = os.path.join(self.root_log_dir, self.load_model_run_id)

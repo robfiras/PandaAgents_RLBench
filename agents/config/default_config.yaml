@@ -33,7 +33,6 @@ Agent:
     episode_length: 40
     logging_interval: 10
     scale_observations: yes
-    scale_actions: yes
   Task: ReachTarget # until now only ReachTarget (more coming soon)
 
 # config for all RL agents
