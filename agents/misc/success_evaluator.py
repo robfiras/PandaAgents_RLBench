@@ -17,6 +17,5 @@ class SuccessEvaluator:
             self.successful_episodes_perc = self._n_succ_last_interval / self._episodes_in_interval
             self._episodes_in_interval = 0
             self._n_succ_last_interval = 0
-        self._last_episode = episode
         self._episodes_in_interval += episode - self._last_episode
-
+        self._last_episode = episode

@@ -38,6 +38,7 @@ def job_descendant(descendant_id,
                    layers_network,
                    dim_actions,
                    max_actions,
+                   obs_scaling_vector,
                    lr,
                    dim_observations,
                    utility,
@@ -105,11 +106,17 @@ def job_descendant(descendant_id,
             episode_reward = 0
             _, obs = task.reset()
             for i in range(episode_length):
-                action = rollout_model.predict(tf.constant([obs.get_low_dim_data()]))
+                if obs_scaling_vector is None:
+                    action = rollout_model.predict(tf.constant([obs.get_low_dim_data()]))
+                else:
+                    action = rollout_model.predict(tf.constant([obs.get_low_dim_data()/obs_scaling_vector]))
                 obs, reward, done = task.step(np.squeeze(action))
+                # return reward at the end of the episode
                 if done:
                     episode_reward = euclidean_distance_reward(obs)
                     break
+                elif i == (episode_length-1):
+                    episode_reward = euclidean_distance_reward(obs)
 
             ''' 3. Add reward to reward shared memory to tell other workers about our reward and 
                 read the rewards of other descendants as well '''
@@ -151,9 +158,9 @@ def job_descendant(descendant_id,
                 all were updated with the same rewards and utilizations '''
             rollout_model.set_weights(training_model.get_weights())
 
-            ''' 6. Check if we need to save weights '''
+            ''' 6. Check if we need to save weights | Only one descendant saves weights '''
             episode += n_descendants_abs
-            if save_weights and (episode % save_weights_interval == 0):
+            if save_weights and (episode % save_weights_interval == 0) and descendant_id == 0:
                 path_to_dir = os.path.join(root_log_dir, "weights", "")
                 training_model.save(path_to_dir)
 

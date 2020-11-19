@@ -49,6 +49,7 @@ class OpenAIES(ESAgent):
                                                                     self.layers_network,
                                                                     self.dim_actions,
                                                                     self.max_actions,
+                                                                    self.obs_scaling_vector,
                                                                     self.lr,
                                                                     self.dim_observations,
                                                                     utility,
