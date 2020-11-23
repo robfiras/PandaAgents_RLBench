@@ -5,8 +5,9 @@ import tensorflow as tf
 import numpy as np
 
 from rlbench.environment import Environment
+from rlbench.sim2real.domain_randomization_environment import DomainRandomizationEnvironment
 from agents.base_es import Network
-from agents.misc.custom_rewards import euclidean_distance_reward
+from agents.misc.camcorder import Camcorder
 
 # tf.config.run_functions_eagerly(True)
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
@@ -55,10 +56,19 @@ def job_descendant(descendant_id,
                    save_weights,
                    save_weights_interval,
                    root_log_dir,
+                   save_camera_input,
+                   rand_env,
+                   visual_rand_config,
+                   randomize_every,
                    path_to_model):
 
     # setup the environment
-    env = Environment(action_mode=action_mode, obs_config=obs_config, headless=headless)
+    if rand_env:
+        env = DomainRandomizationEnvironment(action_mode=action_mode, obs_config=obs_config,
+                                             headless=headless, randomize_every=randomize_every,
+                                             visual_randomization_config=visual_rand_config)
+    else:
+        env = Environment(action_mode=action_mode, obs_config=obs_config, headless=headless)
     env.launch()
     task = env.get_task(task_class)
     task.reset()
@@ -89,6 +99,10 @@ def job_descendant(descendant_id,
     # this needed to call the above generators equally often to properly reconstruct the noise
     rollout_generator = tf.random.Generator.from_seed(noise_seeds[descendant_id])
 
+    # we can save all enables camera inputs to root log dir if we want
+    if save_camera_input:
+        camcorder = Camcorder(root_log_dir, descendant_id)
+
     print("Initialized descendant %d" % descendant_id)
 
     signs = [sign(i) for i in range(n_descendants_abs)]
@@ -106,6 +120,8 @@ def job_descendant(descendant_id,
             episode_reward = 0
             _, obs = task.reset()
             for i in range(episode_length):
+                if save_camera_input:
+                    camcorder.save(obs, task.get_all_graspable_object_poses())
                 if obs_scaling_vector is None:
                     action = rollout_model.predict(tf.constant([obs.get_low_dim_data()]))
                 else:
@@ -113,10 +129,10 @@ def job_descendant(descendant_id,
                 obs, reward, done = task.step(np.squeeze(action))
                 # return reward at the end of the episode
                 if done:
-                    episode_reward = euclidean_distance_reward(obs)
+                    episode_reward = reward
                     break
                 elif i == (episode_length-1):
-                    episode_reward = euclidean_distance_reward(obs)
+                    episode_reward = reward
 
             ''' 3. Add reward to reward shared memory to tell other workers about our reward and 
                 read the rewards of other descendants as well '''

@@ -6,10 +6,10 @@ Agent:
   ArmActionMode: ABS_JOINT_VELOCITY # c.f., rlbench to see available arm action modes
   GripperActionMode: OPEN_AMOUNT  # c.f., rlbench to see available gripper action modes
   Observations:
-    left_shoulder_camera: null  # not supported yet
-    right_shoulder_camera: null # not supported yet
-    wrist_camera: null  # not supported yet
-    front_camera: null  # not supported yet
+    left_shoulder_camera: no
+    right_shoulder_camera: no
+    wrist_camera: no
+    front_camera: yes
     joint_velocities: yes
     joint_positions: yes
     joint_forces: yes
@@ -32,8 +32,13 @@ Agent:
     episodes: 40
     episode_length: 40
     logging_interval: 10
-    scale_observations: yes
-  Task: ReachTarget # until now only ReachTarget (more coming soon)
+    scale_robot_observations: yes # if set robot observations are normalized
+    save_camera_input: yes # if set all enabled cameras inputs are saved at root log dir
+    domain_randomization_environment: no
+    domain_randomization_setup:
+      image_directory: null
+      randomize_every: episode # either episode, variation or transition
+  Task: PickAndLift # until now only ReachTarget or PickAndLift (more coming soon)
 
 # config for all RL agents
 RLAgent:
@@ -76,7 +81,7 @@ DDPG:
 # config for all ES agents
 ESAgent:
   Hyperparameters:
-    n_descendants: 8
+    n_descendants: 2
     lr: 0.01
     sigma: 0.05
     layers_network:
@@ -86,7 +91,7 @@ ESAgent:
 # some Panda specific parameters
 Robot:
   Dimensions:
-    observations: 40
+    observations: 47
     actions: 8
   Limits:
     joint_vel:
@@ -141,10 +146,6 @@ Robot:
       - 20.0
     gripper_open:
       - 1.0
-    low_dim_task:
-      - 3.0
-      - 3.0
-      - 3.0
     actions:
       - 1.0
       - 1.0
@@ -153,6 +154,43 @@ Robot:
       - 1.0
       - 1.0
       - 1.0
+
+# setup the camera (if selected above)
+CameraConfig:
+  left_shoulder_camera:
+    rgb: yes
+    depth: no
+    mask: no
+    mask_as_one_channel: yes
+    image_size:
+      - 128
+      - 128
+  right_shoulder_camera:
+    rgb: yes
+    depth: no
+    mask: no
+    mask_as_one_channel: yes
+    image_size:
+      - 128
+      - 128
+  wrist_camera:
+    rgb: yes
+    depth: no
+    mask: no
+    mask_as_one_channel: yes
+    image_size:
+      - 128
+      - 128
+  front_camera:
+    rgb: yes
+    depth: no
+    mask: no
+    mask_as_one_channel: yes
+    image_size:
+      - 128
+      - 128
+
+
 
 
 

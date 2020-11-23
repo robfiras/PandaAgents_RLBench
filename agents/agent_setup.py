@@ -3,8 +3,8 @@ import sys
 import yaml
 
 from rlbench.action_modes import ArmActionMode, GripperActionMode, ActionMode
-from rlbench.observation_config import ObservationConfig
-from rlbench.tasks.reach_target import ReachTarget
+from rlbench.observation_config import ObservationConfig, CameraConfig
+from rlbench.tasks import reach_target, custom_pick_and_lift
 from agents.ddpg import DDPG
 from agents.td3 import TD3
 from agents.openai_es import OpenAIES
@@ -98,13 +98,27 @@ class AgentConfig:
 
         return ActionMode(arm=arm_action_mode, gripper=gripper_action_mode)
 
+    def _get_camera_setup(self, name):
+        if self.cfg["Agent"]["Observations"][name]:
+            camera = self.cfg["CameraConfig"][name]
+
+            return CameraConfig(rgb=camera["rgb"],
+                                depth=camera["depth"],
+                                mask=camera["mask"],
+                                masks_as_one_channel=camera["mask_as_one_channel"],
+                                image_size=(camera["image_size"][0], camera["image_size"][1]))
+        else:
+            camera_config = CameraConfig()
+            camera_config.set_all(False)    # disable rgb, depth and mask
+            return camera_config
+
     def __setup_obs_config(self):
         oc = self.cfg["Agent"]["Observations"]
 
-        obs_config = ObservationConfig(left_shoulder_camera=oc["left_shoulder_camera"],
-                                       right_shoulder_camera=oc["right_shoulder_camera"],
-                                       wrist_camera=oc["wrist_camera"],
-                                       front_camera=oc["front_camera"],
+        obs_config = ObservationConfig(left_shoulder_camera=self._get_camera_setup("left_shoulder_camera"),
+                                       right_shoulder_camera=self._get_camera_setup("right_shoulder_camera"),
+                                       wrist_camera=self._get_camera_setup("wrist_camera"),
+                                       front_camera=self._get_camera_setup("front_camera"),
                                        joint_velocities=oc["joint_velocities"],
                                        joint_positions=oc["joint_positions"],
                                        joint_forces=oc["joint_forces"],
@@ -114,15 +128,14 @@ class AgentConfig:
                                        gripper_touch_forces=oc["gripper_touch_forces"],
                                        task_low_dim_state=oc["task_low_dim_state"])
 
-        # high-dim currently not supported
-        obs_config.set_all_high_dim(False)
-
         return obs_config
 
     def __setup_task_class(self):
         task_class = self.cfg["Agent"]["Task"]
         if task_class == "ReachTarget":
-            return ReachTarget
+            return reach_target.ReachTarget
+        elif task_class == "PickAndLift":
+            return custom_pick_and_lift.CustomPickAndLift
         else:
             raise ValueError("Until now only ReachTarget Task supported. More coming soon.")
 

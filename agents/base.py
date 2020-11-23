@@ -8,9 +8,12 @@ import tensorflow as tf
 
 from agents.misc.logger import CmdLineLogger
 from agents.misc.success_evaluator import SuccessEvaluator
+import rlbench
 from rlbench.observation_config import ObservationConfig
 from rlbench.action_modes import ActionMode
 from rlbench.environment import Environment
+from rlbench.sim2real.domain_randomization_environment import DomainRandomizationEnvironment
+from rlbench.sim2real.domain_randomization import VisualRandomizationConfig, RandomizeEvery
 
 
 class Agent(object):
@@ -36,16 +39,43 @@ class Agent(object):
         self.seed = setup["seed"]
         self.training_episodes = setup["episodes"]
         self.episode_length = setup["episode_length"]
-        self.scale_observations = setup["scale_observations"]
+        self.scale_robot_observations = setup["scale_robot_observations"]
+        self.save_camera_input = setup["save_camera_input"]
         self.logging_interval = setup["logging_interval"]
         if self.load_model_run_id:
             self.path_to_model = os.path.join(self.root_log_dir, self.load_model_run_id)
         else:
             self.path_to_model = None
 
+        # setup rlbench environment
         self.action_mode = action_mode
         self.task_class = task_class
         self.obs_config = obs_config
+        self.rand_env = setup["domain_randomization_environment"]
+        if self.rand_env:
+            rand_env_setup = setup["domain_randomization_setup"]
+            if not rand_env_setup["image_directory"]:
+                # use textures in rlbench's test folder
+                rlbench_path = os.path.dirname(rlbench.__file__)
+                # go one dir back
+                RLBench_path = os.path.dirname(rlbench_path)
+                # append dir to textures
+                self.rand_texture_dir = os.path.join(RLBench_path, "tests", "unit", "assets", "textures")
+                print("\nNo texture folder provided for DomainRandomization. Using default folder at %s." % self.rand_texture_dir)
+            else:
+                self.rand_texture_dir = rand_env_setup["image_directory"]
+                if not os.path.exists(self.rand_texture_dir):
+                    raise FileNotFoundError("Provided path %s does not exist!" % self.rand_texture_dir)
+            self.visual_rand_config = VisualRandomizationConfig(image_directory=self.rand_texture_dir)
+            self.randomize_every = rand_env_setup["randomize_every"]
+            if self.randomize_every == "episode":
+                self.randomize_every = RandomizeEvery.EPISODE
+            elif self.randomize_every == "variation":
+                self.randomize_every = RandomizeEvery.VARIATION
+            elif self.randomize_every == "transition":
+                self.randomize_every = RandomizeEvery.TRANSITION
+            else:
+                raise ValueError("%s is not a supported randomization mode." % self.randomize_every)
 
         # set seed of random and numpy
         random.seed(self.seed)
@@ -57,15 +87,17 @@ class Agent(object):
         self.dim_actions = self.cfg["Robot"]["Dimensions"]["actions"]
 
         # add an custom/unique id for logging
-        if (self.use_tensorboard or self.save_weights) and self.root_log_dir:
-            if not self.run_id:
-                self.run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
-            self.root_log_dir = os.path.join(self.root_log_dir, self.run_id, "")
+        if not self.root_log_dir:
+            print("You have set the path to the root logging directory in the config-file.")
+            self.root_log_dir = input("Please enter the path to the root logging directory:")
+        if not self.run_id:
+            self.run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
+        self.root_log_dir = os.path.join(self.root_log_dir, self.run_id, "")
 
-            # check if dir exists already
-            if not os.path.exists(self.root_log_dir):
-                print("\nCreating new directory: ", self.root_log_dir, "\n")
-                os.mkdir(self.root_log_dir)
+        # check if dir exists already
+        if not os.path.exists(self.root_log_dir):
+            print("\nCreating new directory: ", self.root_log_dir, "\n")
+            os.mkdir(self.root_log_dir)
 
         # --- set observation and action limits for scaling
         robot_limits = self.cfg["Robot"]["Limits"]
@@ -90,18 +122,20 @@ class Agent(object):
         self.gripper_joint_pos_limits = np.array(robot_limits["gripper_pos"])
         # gripper touch forces -> 2* x,y,z
         self.gripper_force_limits = np.array(robot_limits["gripper_force"])
-        # low dim task -> here for reach target
-        self.low_dim_task_limits = np.array(robot_limits["low_dim_task"])
         # concatenate to scaling vector
-        if self.scale_observations:
+        if self.scale_robot_observations:
+            # only the robot state is scaled
             self.obs_scaling_vector = np.concatenate((self.gripper_open_limits,
                                                       self.joint_vel_limits,
                                                       self.joint_pos_limits_rad,
                                                       self.joint_force_limits,
                                                       self.gripper_pose_limits,
                                                       self.gripper_joint_pos_limits,
-                                                      self.gripper_force_limits,
-                                                      self.low_dim_task_limits))
+                                                      self.gripper_force_limits))
+            # append with ones for low-dim task state
+            self.obs_scaling_vector = np.append(
+                self.obs_scaling_vector, np.ones(self.dim_observations - len(self.obs_scaling_vector)))
+
         else:
             self.obs_scaling_vector = None
 
@@ -112,7 +146,12 @@ class Agent(object):
         """ Runs validation for presentation purposes
         :param model: Tensorflow model for action prediction
         """
-        env = Environment(action_mode=self.action_mode, obs_config=self.obs_config, headless=False)
+        if self.rand_env:
+            env = DomainRandomizationEnvironment(action_mode=self.action_mode, obs_config=self.obs_config,
+                                                 headless=False, randomize_every=self.randomize_every,
+                                                 visual_randomization_config=self.visual_rand_config)
+        else:
+            env = Environment(action_mode=self.action_mode, obs_config=self.obs_config, headless=False)
         env.launch()
         task = env.get_task(self.task_class)
         task.reset()

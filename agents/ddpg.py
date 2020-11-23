@@ -11,7 +11,6 @@ from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
 from agents.misc.tensorboard_logger import TensorBoardLogger
 from agents.base_rl import RLAgent
-from agents.misc.custom_rewards import euclidean_distance_reward_vec
 import agents.misc.utils as utils
 
 # tf.config.run_functions_eagerly(True)
@@ -306,7 +305,8 @@ class DDPG(RLAgent):
             self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
                                  done=done, running_workers=running_workers)
 
-            if total_steps >= self.start_training and self.global_step_main % self.training_interval == 0:
+            training_cond = total_steps >= self.start_training and self.global_step_main % self.training_interval == 0
+            if training_cond:
                 avg_crit_loss = 0
                 avg_act_loss = 0
                 worker_training_actors = 0
@@ -330,8 +330,8 @@ class DDPG(RLAgent):
             if self.use_tensorboard:
                 number_of_succ_episodes, percentage_succ = self.tensorboard_logger(total_steps=total_steps,
                                                                                    episode=self.global_episode,
-                                                                                   losses={"Critic-Loss": avg_crit_loss,
-                                                                                           "Actor-Loss": avg_act_loss},
+                                                                                   losses={"Critic-Loss": avg_crit_loss if training_cond else None,
+                                                                                           "Actor-Loss": avg_act_loss if training_cond else None},
                                                                                    dones=done,
                                                                                    step_in_episode=step_in_episode,
                                                                                    rewards=reward,
@@ -408,7 +408,6 @@ class DDPG(RLAgent):
         finished_workers = []
         for w, o, a, e in zip(running_workers, obs, action, range(self.n_workers)):
             single_next_obs, single_reward, single_done = w["result_queue"].get()
-            #single_reward = euclidean_distance_reward_vec(single_next_obs)  # added custom reward
             single_reward = single_reward
             self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
                                       float(single_done), (e+self.global_episode))

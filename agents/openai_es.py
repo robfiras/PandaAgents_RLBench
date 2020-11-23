@@ -66,6 +66,10 @@ class OpenAIES(ESAgent):
                                                                     self.save_weights,
                                                                     self.save_weights_interval,
                                                                     self.root_log_dir,
+                                                                    self.save_camera_input,
+                                                                    self.rand_env,
+                                                                    self.visual_rand_config,
+                                                                    self.randomize_every,
                                                                     self.path_to_model)) for i in range(self.n_descendants_abs)]
 
         # we need to setup a separate Tensorboard thread since tf can not be
