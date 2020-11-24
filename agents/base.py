@@ -76,6 +76,9 @@ class Agent(object):
                 self.randomize_every = RandomizeEvery.TRANSITION
             else:
                 raise ValueError("%s is not a supported randomization mode." % self.randomize_every)
+        else:
+            self.visual_rand_config = None
+            self.randomize_every = None
 
         # set seed of random and numpy
         random.seed(self.seed)

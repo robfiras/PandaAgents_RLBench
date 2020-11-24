@@ -122,6 +122,8 @@ class OpenAIES(ESAgent):
                 # reset the counters
                 self.finished_reward_reading.value = 0
                 self.finished_reward_writing.value = 0
+                # unset event
+                self.start_reading_rewards.clear()
                 # collect rewards and dones
                 rewards = [0.0]*self.n_descendants_abs
                 dones = [0.0]*self.n_descendants_abs
