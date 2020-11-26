@@ -170,7 +170,7 @@ class DDPG(RLAgent):
         self.lr_actor = hparams["lr_actor"]
         self.lr_critic = hparams["lr_critic"]
 
-        # some DDQN specific setups
+        # some DDPG specific setups
         setup = self.cfg["DDPG"]["Setup"]
         self.start_training = setup["start_training"]
         self.use_ou_noise = setup["use_ou_noise"]
@@ -291,6 +291,10 @@ class DDPG(RLAgent):
                     self.global_episode += self.n_workers
                     step_in_episode = 0
 
+                # save weights if needed
+                if self.save_weights and self.global_episode % self.save_weights_interval == 0:
+                    self.save_all_models()
+
                 logger(self.global_episode, number_of_succ_episodes, percentage_succ)
 
             total_steps = self.global_step_main * self.n_workers
@@ -321,10 +325,6 @@ class DDPG(RLAgent):
                     avg_act_loss = avg_act_loss / worker_training_actors
                 else:
                     avg_act_loss = None
-
-            # save weights if needed
-            if self.save_weights and total_steps % self.save_weights_interval == 0 and total_steps > self.start_training:
-                self.save_all_models()
 
             # log to tensorboard if needed
             if self.use_tensorboard:
