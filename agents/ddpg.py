@@ -279,6 +279,9 @@ class DDPG(RLAgent):
         step_in_episode = 0
         logger = CmdLineLogger(self.logging_interval, self.training_episodes, self.n_workers)
         while self.global_episode < self.training_episodes:
+
+            total_steps = self.global_step_main * self.n_workers
+
             # reset episode if maximal length is reached or all worker are done
             if self.global_step_main % self.episode_length == 0 or not running_workers:
                 obs = []
@@ -292,12 +295,12 @@ class DDPG(RLAgent):
                     step_in_episode = 0
 
                 # save weights if needed
-                if self.save_weights and self.global_episode % self.save_weights_interval == 0:
+                save_cond = (self.save_weights and self.global_episode % self.save_weights_interval == 0 and
+                             total_steps > (self.start_training+1))
+                if save_cond:
                     self.save_all_models()
 
                 logger(self.global_episode, number_of_succ_episodes, percentage_succ)
-
-            total_steps = self.global_step_main * self.n_workers
 
             # predict action with actor
             if self.n_steps_random_actions > total_steps:

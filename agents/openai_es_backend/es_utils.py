@@ -127,12 +127,8 @@ def job_descendant(descendant_id,
                 else:
                     action = rollout_model.predict(tf.constant([obs.get_low_dim_data()/obs_scaling_vector]))
                 obs, reward, done = task.step(np.squeeze(action))
-                # return reward at the end of the episode
-                if done:
-                    episode_reward = reward
-                    break
-                elif i == (episode_length-1):
-                    episode_reward = reward
+                # cumulate reward
+                episode_reward += reward
 
             ''' 3. Add reward to reward shared memory to tell other workers about our reward and 
                 read the rewards of other descendants as well '''
