@@ -12,7 +12,7 @@ class Camcorder:
         self.id = unique_id
         self.path_to_camcorder = os.path.join(path_to_save, "camcorder")
         self.path_to_camcorder_task_low_dim = os.path.join(path_to_save, "camcorder_task_low_dim")
-        self.path_to_csv = os.path.join(self.path_to_camcorder_task_low_dim, "%i_task_low_dim" % self.id)
+        self.path_to_csv = os.path.join(self.path_to_camcorder_task_low_dim, "%i_task_low_dim.csv" % self.id)
         # make both directories
         if not os.path.exists(self.path_to_camcorder):
             os.mkdir(self.path_to_camcorder)
@@ -27,13 +27,15 @@ class Camcorder:
         def reformat(float_image):
             return (float_image * 255).astype(np.uint8)
 
-        def get_poses_as_array(obj_poses):
-            lst = []
-            for obj in obj_poses:
-                for pose in obj.values():
-                    if pose is not None:
-                        lst.append(pose)
-            return np.concatenate(lst, axis=0)
+        def get_all_poses(obj_poses, camera):
+            if camera == "left_shoulder_camera":
+                return [pose["left_shoulder_camera"] for pose in obj_poses if pose["left_shoulder_camera"] is not None]
+            if camera == "right_shoulder_camera":
+                return [pose["right_shoulder_camera"] for pose in obj_poses if pose["right_shoulder_camera"] is not None]
+            if camera == "front_camera":
+                return [pose["front_camera"] for pose in obj_poses if pose["front_camera"] is not None]
+            if camera == "wrist_camera":
+                return [pose["wrist_camera"] for pose in obj_poses if pose["wrist_camera"] is not None]
 
         if obs.left_shoulder_rgb is not None:
             left_shoulder_image = Image.fromarray(reformat(obs.left_shoulder_rgb))
@@ -58,8 +60,10 @@ class Camcorder:
         if obj_poses:
             with open(self.path_to_csv, mode='a') as label_file:
                 writer = csv.writer(label_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-                data = ["%i_%i" % (self.id, self.counter)] + get_poses_as_array(obj_poses).tolist()
-                writer.writerow(data)
+                for camera in ["left_shoulder_camera", "right_shoulder_camera", "front_camera", "wrist_camera"]:
+                    poses = get_all_poses(obj_poses, camera)
+                    for pose in poses:
+                        writer.writerow(["%i_%i_%s" % (self.id, self.counter, camera)] + pose.tolist())
         self.counter += 1
 
 
