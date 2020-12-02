@@ -20,16 +20,14 @@ class RLAgent(Agent):
 
         # multiprocessing stuff
         self.workers = []
-        self.command_queue = []
-        self.result_queue = []
         self.n_workers = self.cfg["RLAgent"]["Setup"]["n_workers"]
+        self.command_queue = [mp.Queue() for i in range(self.n_workers)]
+        self.result_queue = [mp.Queue() for i in range(self.n_workers)]
         if self.n_workers > 1 and not self.headless:
             print("Turning headless mode on, since more than one worker is  running.")
             self.headless = True
         if self.save_weights:
             self.save_weights_interval = utils.adjust_save_interval(self.save_weights_interval, self.n_workers)
-        if self.mode == "online_training":
-            self.run_workers()
         self.worker_conn = [{"command_queue": cq,
                              "result_queue": rq,
                              "index": idx} for cq, rq, idx in zip(self.command_queue,
@@ -37,8 +35,6 @@ class RLAgent(Agent):
                                                                   range(self.n_workers))]
 
     def run_workers(self):
-        self.command_queue = [mp.Queue() for i in range(self.n_workers)]
-        self.result_queue = [mp.Queue() for i in range(self.n_workers)]
         self.workers = [mp.Process(target=job_worker,
                                    args=(worker_id,
                                          self.action_mode,

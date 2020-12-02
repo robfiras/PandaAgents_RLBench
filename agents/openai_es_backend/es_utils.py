@@ -10,7 +10,6 @@ from agents.base_es import Network
 from agents.misc.camcorder import Camcorder
 
 # tf.config.run_functions_eagerly(True)
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 tf.keras.backend.set_floatx('float64')
 
 
@@ -61,6 +60,9 @@ def job_descendant(descendant_id,
                    visual_rand_config,
                    randomize_every,
                    path_to_model):
+
+    # do not allow to run on GPU (does not work for multiple processes at the same time)
+    os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
     # setup the environment
     if rand_env:

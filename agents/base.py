@@ -76,6 +76,9 @@ class Agent(object):
                 self.randomize_every = RandomizeEvery.TRANSITION
             else:
                 raise ValueError("%s is not a supported randomization mode." % self.randomize_every)
+        else:
+            self.visual_rand_config = None
+            self.randomize_every = None
 
         # set seed of random and numpy
         random.seed(self.seed)
@@ -175,8 +178,12 @@ class Agent(object):
 
             actions = np.squeeze(model.predict(tf.constant([observation])))
             next_observation, reward, done = task.step(actions)
+            if self.obs_scaling_vector is not None:
+                next_observation = next_observation.get_low_dim_data() / self.obs_scaling_vector
+            else:
+                next_observation = next_observation.get_low_dim_data()
             evaluator.add(episode, done)
-            observation = next_observation.get_low_dim_data()
+            observation = next_observation
             step += 1
         env.shutdown()
         print("\nDone.\n")
