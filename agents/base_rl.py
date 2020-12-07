@@ -85,6 +85,7 @@ def job_worker(worker_id, action_mode,
         command_type = command[0]
         command_args = command[1]
         if command_type == "reset":
+            task.set_variation(task.sample_variation())
             descriptions, observation = task.reset()
             if save_camera_input:
                 camcorder.save(observation, task.get_all_graspable_object_poses())

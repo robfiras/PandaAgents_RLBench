@@ -14,9 +14,9 @@ class Camcorder:
         self.path_to_camcorder_task_low_dim = os.path.join(path_to_save, "camcorder_task_low_dim")
         self.path_to_csv = os.path.join(self.path_to_camcorder_task_low_dim, "%i_task_low_dim.csv" % self.id)
         # make both directories
-        if not os.path.exists(self.path_to_camcorder):
+        if not os.path.exists(self.path_to_camcorder) and unique_id == 0:
             os.mkdir(self.path_to_camcorder)
-        if not os.path.exists(self.path_to_camcorder_task_low_dim):
+        if not os.path.exists(self.path_to_camcorder_task_low_dim) and unique_id == 0:
             os.mkdir(self.path_to_camcorder_task_low_dim)
 
         self.format = format

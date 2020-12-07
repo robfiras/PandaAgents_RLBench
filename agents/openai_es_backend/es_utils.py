@@ -120,6 +120,7 @@ def job_descendant(descendant_id,
 
             ''' 2. Run an entire episode using the perturbated rollout network '''
             episode_reward = 0
+            task.set_variation(task.sample_variation())
             _, obs = task.reset()
             for i in range(episode_length):
                 if save_camera_input:
