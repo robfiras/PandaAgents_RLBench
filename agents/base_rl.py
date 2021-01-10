@@ -88,7 +88,7 @@ def job_worker(worker_id, action_mode,
             task.set_variation(task.sample_variation())
             descriptions, observation = task.reset()
             if save_camera_input:
-                camcorder.save(observation, task.get_all_graspable_object_poses())
+                camcorder.save(observation, task.get_robot_visuals(), task.get_all_graspable_objects())
             if obs_scaling is not None:
                 observation = observation.get_low_dim_data() / obs_scaling
             else:
@@ -98,7 +98,7 @@ def job_worker(worker_id, action_mode,
             actions = command_args[0]
             next_observation, reward, done = task.step(actions)
             if save_camera_input:
-                camcorder.save(next_observation, task.get_all_graspable_object_poses())
+                camcorder.save(next_observation, task.get_robot_visuals(), task.get_all_graspable_objects())
             if obs_scaling is not None:
                 next_observation = next_observation.get_low_dim_data() / obs_scaling
             else:
@@ -107,26 +107,5 @@ def job_worker(worker_id, action_mode,
         elif command_type == "kill":
             print("Killing worker %d" % worker_id)
             env.shutdown()
+            camcorder.shutdown()    # this saves the mask labels
             break
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
