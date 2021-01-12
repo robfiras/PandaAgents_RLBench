@@ -16,9 +16,6 @@ class Camcorder:
         self.path_to_camcorder_task_low_dim = os.path.join(path_to_save, "camcorder_task_low_dim")
         self.path_to_csv = os.path.join(self.path_to_camcorder_task_low_dim, "%i_task_low_dim.csv" % self.id)
         self.path_to_masks = os.path.join(path_to_save, "masks")
-        self.path_to_mask_labels = os.path.join(path_to_save, "mask_labels")
-        self.path_to_mask_label_file = os.path.join(self.path_to_mask_labels, "%i_mask_labels.yaml" % self.id)
-        self.mask_label_dict = {}
         # make both directories
         if not os.path.exists(self.path_to_camcorder) and unique_id == 0:
             os.mkdir(self.path_to_camcorder)
@@ -26,8 +23,6 @@ class Camcorder:
             os.mkdir(self.path_to_camcorder_task_low_dim)
         if not os.path.exists(self.path_to_masks) and unique_id == 0:
             os.mkdir(self.path_to_masks)
-        if not os.path.exists(self.path_to_mask_labels) and unique_id == 0:
-            os.mkdir(self.path_to_mask_labels)
 
         self.format = format
         self.counter = 0
@@ -76,60 +71,47 @@ class Camcorder:
                     writer.writerow(["%s_%s" % (curr_id, obj_name)] + obj.get_pose().tolist())
 
         # --- MASK ---
-        mask_available = False
-        if obs.left_shoulder_mask is not None:
-            left_shoulder_mask_image = Image.fromarray(reformat(obs.left_shoulder_mask))
-            image_name = "%s_left_shoulder_camera_mask.jpg" % curr_id
-            image_path = os.path.join(self.path_to_masks, image_name)
-            left_shoulder_mask_image.save(image_path, format=self.format)
-            mask_available = True
-        if obs.right_shoulder_mask is not None:
-            right_shoulder_mask_image = Image.fromarray(reformat(obs.right_shoulder_mask))
-            image_name = "%s_right_shoulder_camera_mask.jpg" % curr_id
-            image_path = os.path.join(self.path_to_masks, image_name)
-            right_shoulder_mask_image.save(image_path, format=self.format)
-            mask_available = True
-        if obs.front_mask is not None:
-            front_mask_image = Image.fromarray(reformat(obs.front_mask))
-            image_name = "%s_front_camera_mask.jpg" % curr_id
-            image_path = os.path.join(self.path_to_masks, image_name)
-            front_mask_image.save(image_path, format=self.format)
-            mask_available = True
-        if obs.wrist_mask is not None:
-            wrist_mask_image = Image.fromarray(reformat(obs.wrist_mask))
-            image_name = "%s_wrist_camera_mask.jpg" % curr_id
-            image_path = os.path.join(self.path_to_masks, image_name)
-            wrist_mask_image.save(image_path, format=self.format)
-            mask_available = True
-
-        # save mask labels (only graspable objects and Panda robot)
-        if mask_available:
-            relevant_handles = []
-            relevant_names = []
-            if graspable_objs:
-                graspable_obj_handles = [go.get_handle() for go in graspable_objs]
-                relevant_names += [Object.get_object_name(goh) for goh in graspable_obj_handles]
-                relevant_handles += graspable_obj_handles
-            if robot_visuals:
-                robot_visual_handles = [rv.get_handle() for rv in robot_visuals]
-                relevant_names += [Object.get_object_name(rvh) for rvh in robot_visual_handles]
-                relevant_handles += robot_visual_handles
-            if relevant_handles:
-                self.mask_label_dict[curr_id] = dict(zip(relevant_handles, relevant_names))
+        relevant_handles = self.get_relevant_handles(robot_visuals, graspable_objs)
+        if relevant_handles:
+            if obs.left_shoulder_mask is not None:
+                left_shoulder_mask_image = self.filter_for_handles(obs.left_shoulder_mask, relevant_handles)
+                left_shoulder_mask_image = Image.fromarray(reformat(left_shoulder_mask_image))
+                image_name = "%s_left_shoulder_camera.jpg" % curr_id
+                image_path = os.path.join(self.path_to_masks, image_name)
+                left_shoulder_mask_image.save(image_path, format=self.format)
+            if obs.right_shoulder_mask is not None:
+                right_shoulder_mask_image = self.filter_for_handles(obs.right_shoulder_mask, relevant_handles)
+                right_shoulder_mask_image = Image.fromarray(reformat(right_shoulder_mask_image))
+                image_name = "%s_right_shoulder_camera.jpg" % curr_id
+                image_path = os.path.join(self.path_to_masks, image_name)
+                right_shoulder_mask_image.save(image_path, format=self.format)
+            if obs.wrist_mask is not None:
+                wrist_mask_image = self.filter_for_handles(obs.wrist_mask, relevant_handles)
+                wrist_mask_image = Image.fromarray(reformat(wrist_mask_image))
+                image_name = "%s_wrist_camera.jpg" % curr_id
+                image_path = os.path.join(self.path_to_masks, image_name)
+                wrist_mask_image.save(image_path, format=self.format)
+            if obs.front_mask is not None:
+                front_mask_image = self.filter_for_handles(obs.front_mask, relevant_handles)
+                front_mask_image = Image.fromarray(reformat(front_mask_image))
+                image_name = "%s_front_camera.jpg" % curr_id
+                image_path = os.path.join(self.path_to_masks, image_name)
+                front_mask_image.save(image_path, format=self.format)
 
         self.counter += 1
 
-    def save_dict_to_yaml(self):
-        if os.path.exists(self.path_to_mask_label_file):
-            with open(self.path_to_mask_label_file, 'r') as mask_label_file:
-                cur_mask_label_file = yaml.safe_load(mask_label_file) or {}
-                cur_mask_label_file.update(self.mask_label_dict)
-            if mask_label_file:
-                with open(self.path_to_mask_label_file, 'w') as new_mask_label_file:
-                    yaml.safe_dump(cur_mask_label_file, new_mask_label_file)
-        else:
-            with open(self.path_to_mask_label_file, 'w') as mask_label_file:
-                yaml.safe_dump(self.mask_label_dict, mask_label_file)
+    @staticmethod
+    def get_relevant_handles(robot_visuals, graspable_objs):
+        relevant_handles = []
+        if graspable_objs:
+            relevant_handles += [go.get_handle() for go in graspable_objs]
+        if robot_visuals:
+            relevant_handles += [rv.get_handle() for rv in robot_visuals]
+        return relevant_handles
 
-    def shutdown(self):
-        self.save_dict_to_yaml()
+    @staticmethod
+    def filter_for_handles(mask, handles):
+        new_mask = np.zeros_like(mask)
+        for handle in handles:
+            new_mask += (mask == handle).astype(float)
+        return new_mask

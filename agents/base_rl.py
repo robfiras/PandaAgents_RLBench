@@ -107,5 +107,4 @@ def job_worker(worker_id, action_mode,
         elif command_type == "kill":
             print("Killing worker %d" % worker_id)
             env.shutdown()
-            camcorder.shutdown()    # this saves the mask labels
             break
