@@ -181,7 +181,8 @@ class DDPG(RLAgent):
         self.write_buffer = setup["write_buffer"]
         self.path_to_read_buffer = None
         if setup["read_buffer_id"]:
-            self.path_to_read_buffer = os.path.join(self.root_log_dir, setup["read_buffer_id"], "")
+            main_logging_dir, _ = os.path.split(os.path.dirname(self.root_log_dir))
+            self.path_to_read_buffer = os.path.join(main_logging_dir, setup["read_buffer_id"], "")
             if not os.path.exists(self.path_to_read_buffer):
                 raise FileNotFoundError("The given path to the read database's directory does not exists: %s" %
                                         self.path_to_read_buffer)
@@ -219,10 +220,9 @@ class DDPG(RLAgent):
                 self.start_training = 0
             else:
                 self.start_training = self.start_training - self.replay_buffer.length
-        self.n_steps_random_actions = 2 * self.start_training
+        self.n_random_episodes = None   # set later in get_action method
         if self.mode == "online_training":
             print("\nStarting training in %d steps." % self.start_training)
-            print("Making completely random actions for the next %d steps. \n" % self.n_steps_random_actions)
 
         # setup tensorboard
         self.summary_writer = None
@@ -254,6 +254,7 @@ class DDPG(RLAgent):
 
     def run(self):
         if self.mode == "online_training":
+            self.run_workers()
             self.run_online_training()
         elif self.mode == "offline_training":
             self.run_offline_training()
@@ -287,9 +288,9 @@ class DDPG(RLAgent):
                 obs = []
                 # init a list of worker (connections) which haven't finished their episodes yet -> all at reset
                 running_workers = self.worker_conn.copy()
+
                 # reset workers
                 self.all_worker_reset(running_workers, obs)
-
                 if self.global_step_main != 0:
                     self.global_episode += self.n_workers
                     step_in_episode = 0
@@ -303,7 +304,7 @@ class DDPG(RLAgent):
                 logger(self.global_episode, number_of_succ_episodes, percentage_succ)
 
             # predict action with actor
-            if self.n_steps_random_actions > total_steps:
+            if self.start_training > total_steps:
                 action = self.get_action(obs, mode="random")
             else:
                 action = self.get_action(obs, mode="eps-greedy-random")
@@ -411,9 +412,8 @@ class DDPG(RLAgent):
         finished_workers = []
         for w, o, a, e in zip(running_workers, obs, action, range(self.n_workers)):
             single_next_obs, single_reward, single_done = w["result_queue"].get()
-            single_reward = single_reward
             self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
-                                      float(single_done), (e+self.global_episode))
+                                      float(0), (e+self.global_episode))    # we do not save dones as we treat all tasks as continues tasks
             next_obs.append(single_next_obs)
             reward.append(single_reward)
             done.append(single_done)
@@ -426,19 +426,21 @@ class DDPG(RLAgent):
 
     def get_action(self, obs, mode):
         """
-        Predicts an action using the actor network. DO NOT USE WHILE TRAINING. Use predict() or noisy_predict() instead
+        Predicts an action using the actor network.
         :param obs: received observation
         :param mode: sets the mode -> either greedy, greedy+noise, random, eps-greedy-noise or eps-greedy-random
         :return: returns a numpy array containing the corresponding actions
         """
         # set epsilon-decay if not set yet
         total_steps = self.global_step_main * self.n_workers
-        if not self.epsilon_decay_episodes and total_steps > self.n_steps_random_actions:
+        if not self.epsilon_decay_episodes and total_steps > self.start_training:
             self.epsilon_decay_episodes = self.training_episodes - self.global_episode
         # calculate epsilon if decay started
-        if self.epsilon_decay_episodes and total_steps > self.n_steps_random_actions:
+        if self.epsilon_decay_episodes and total_steps > self.start_training:
+            if not self.n_random_episodes:
+                self.n_random_episodes = self.global_episode
             epsilon_gradient = ((self.max_epsilon - self.min_epsilon)/self.epsilon_decay_episodes)
-            self.epsilon = self.max_epsilon - epsilon_gradient * (self.global_episode - self.training_episodes + self.epsilon_decay_episodes)
+            self.epsilon = self.max_epsilon - epsilon_gradient * (self.global_episode - self.n_random_episodes)
             self.epsilon = min(self.epsilon, self.max_epsilon)
             self.epsilon = max(self.epsilon, self.min_epsilon)
 
@@ -471,8 +473,8 @@ class DDPG(RLAgent):
         # check if we need to load weights
         if self.path_to_model:
             print("Loading weights from %s to actor..." % self.path_to_model)
-            self.actor.load_weights(os.path.join(self.path_to_model, "actor", "variables", "variables"))
-            self.target_actor.load_weights(os.path.join(self.path_to_model, "actor", "variables", "variables"))
+            self.actor.load_weights(os.path.join(self.path_to_model, "weights", "actor", "variables", "variables"))
+            self.target_actor.load_weights(os.path.join(self.path_to_model, "weights", "actor", "variables", "variables"))
         else:
             # copy the weights to the target actor
             # update_target_variables(self.target_actor.weights, self.actor.weights, tau=1.0)
@@ -481,8 +483,8 @@ class DDPG(RLAgent):
         # check if we need to load weights
         if self.path_to_model:
             print("Loading weights from %s to critic..." % self.path_to_model)
-            self.critic.load_weights(os.path.join(self.path_to_model, "critic", "variables", "variables"))
-            self.target_critic.load_weights(os.path.join(self.path_to_model, "critic", "variables", "variables"))
+            self.critic.load_weights(os.path.join(self.path_to_model, "weights", "critic", "variables", "variables"))
+            self.target_critic.load_weights(os.path.join(self.path_to_model, "weights", "critic", "variables", "variables"))
         else:
             # copy the weights to the target critic
             # update_target_variables(self.target_critic.weights, self.critic.weights, tau=1.0)

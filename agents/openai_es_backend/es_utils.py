@@ -10,7 +10,6 @@ from agents.base_es import Network
 from agents.misc.camcorder import Camcorder
 
 # tf.config.run_functions_eagerly(True)
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 tf.keras.backend.set_floatx('float64')
 
 
@@ -61,6 +60,9 @@ def job_descendant(descendant_id,
                    visual_rand_config,
                    randomize_every,
                    path_to_model):
+
+    # do not allow to run on GPU (does not work for multiple processes at the same time)
+    os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
     # setup the environment
     if rand_env:
@@ -118,6 +120,7 @@ def job_descendant(descendant_id,
 
             ''' 2. Run an entire episode using the perturbated rollout network '''
             episode_reward = 0
+            task.set_variation(task.sample_variation())
             _, obs = task.reset()
             for i in range(episode_length):
                 if save_camera_input:
