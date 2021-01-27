@@ -7,7 +7,7 @@ import numpy as np
 from agents.base_es import ESAgent, Network
 from agents.misc.logger import CmdLineLogger
 from agents.misc.success_evaluator import SuccessEvaluator
-from agents.openai_es_backend.es_utils import job_descendant, tb_logger_job
+from agents.openai_es_backend.es_utils import job_worker, tb_logger_job
 import agents.misc.utils as utils
 
 
@@ -22,55 +22,37 @@ class OpenAIES(ESAgent):
         # call parent constructor
         super(OpenAIES, self).__init__(action_mode, obs_config, task_class, agent_config)
 
-        # setup utilization
-        rank = np.arange(1, self.n_descendants_abs+1)
-        util = np.maximum(0, np.log(self.n_descendants_abs/2 + 1) - np.log(rank))
-        utility = util/util.sum() - 1/self.n_descendants_abs
-        self.noise_seeds = np.random.randint(0, 2 ** 32 - 1, size=self.n_descendants, dtype=np.uint32)
-        self.noise_seeds = np.repeat(self.noise_seeds, 2, axis=0).tolist()  # mirrored sampling
+        self.worker_seeds = np.random.randint(0, 2 ** 32 - 1, size=self.n_workers, dtype=np.uint32)
 
         # multiprocessing setup
         self.lock = mp.Lock()
-        self.command_queues = [mp.Queue() for i in range(self.n_descendants_abs)]
-        self.result_queues = [mp.Queue() for i in range(self.n_descendants_abs)]
-        self.reset_queue = mp.Queue()
-        self.reward_shm = mp.Array('d', [0.0]*self.n_descendants_abs)   # shared memory for reward communication between workers
-        self.finished_reward_writing = mp.Value('i', 0)
-        self.finished_reward_reading = mp.Value('i', 0)
-        self.start_reading_rewards = mp.Event()
-        self.descendants = [mp.Process(target=job_descendant, args=(i,
-                                                                    self.n_descendants_abs,
-                                                                    self.action_mode,
-                                                                    self.obs_config,
-                                                                    self.task_class,
-                                                                    self.command_queues[i],
-                                                                    self.result_queues[i],
-                                                                    self.reset_queue,
-                                                                    self.layers_network,
-                                                                    self.dim_actions,
-                                                                    self.max_actions,
-                                                                    self.obs_scaling_vector,
-                                                                    self.lr,
-                                                                    self.dim_observations,
-                                                                    utility,
-                                                                    self.lock,
-                                                                    self.reward_shm,
-                                                                    self.finished_reward_writing,
-                                                                    self.finished_reward_reading,
-                                                                    self.start_reading_rewards,
-                                                                    self.seed,
-                                                                    self.noise_seeds,
-                                                                    self.sigma,
-                                                                    self.episode_length,
-                                                                    self.headless,
-                                                                    self.save_weights,
-                                                                    self.save_weights_interval,
-                                                                    self.root_log_dir,
-                                                                    self.save_camera_input,
-                                                                    self.rand_env,
-                                                                    self.visual_rand_config,
-                                                                    self.randomize_every,
-                                                                    self.path_to_model)) for i in range(self.n_descendants_abs)]
+        self.command_queues = [mp.Queue() for i in range(self.n_workers)]
+        self.result_queues = [mp.Queue() for i in range(self.n_workers)]
+        self.workers = [mp.Process(target=job_worker, args=(i,
+                                                            self.action_mode,
+                                                            self.obs_config,
+                                                            self.task_class,
+                                                            self.command_queues[i],
+                                                            self.result_queues[i],
+                                                            self.layers_network,
+                                                            self.dim_actions,
+                                                            self.max_actions,
+                                                            self.obs_scaling_vector,
+                                                            self.lr,
+                                                            self.dim_observations,
+                                                            self.seed,
+                                                            self.worker_seeds[i],
+                                                            self.sigma,
+                                                            self.return_mode,
+                                                            self.episode_length,
+                                                            self.headless,
+                                                            self.save_weights,
+                                                            self.root_log_dir,
+                                                            self.save_camera_input,
+                                                            self.rand_env,
+                                                            self.visual_rand_config,
+                                                            self.randomize_every,
+                                                            self.path_to_model)) for i in range(self.n_workers)]
 
         # we need to setup a separate Tensorboard thread since tf can not be
         # imported in the main thread due to multiprocessing
@@ -98,54 +80,47 @@ class OpenAIES(ESAgent):
             raise ValueError("\n%s mode not supported in OpenAI-ES.\n")
 
     def run_online_training(self):
-        logger = CmdLineLogger(self.logging_interval, self.training_episodes, self.n_descendants_abs)
+        logger = CmdLineLogger(self.episodes_per_batch, self.training_episodes, self.n_workers)
         evaluator = SuccessEvaluator()
 
         # start all threads
-        for descendant in self.descendants:
-            descendant.daemon = True
-            descendant.start()
+        for worker in self.workers:
+            worker.daemon = True
+            worker.start()
         if self.use_tensorboard:
             self.tb_logger.start()
 
-        while self.global_episode < self.training_episodes:
+        episode = 0
+
+        while episode < self.training_episodes:
 
             # trigger rollouts in threads
             for q in self.command_queues:
-                q.put("run_episode_and_train")
+                q.put(("run_n_episodes", int(self.episodes_per_batch/self.n_workers)))
 
-            # wait for the descendants to rollout an episode, writing their reward
-            # and reading the reward of other descendants
-            reset_command = self.reset_queue.get()
-            if reset_command == "reset":
-                self.lock.acquire()
-                # reset the counters
-                self.finished_reward_reading.value = 0
-                self.finished_reward_writing.value = 0
-                # unset event
-                self.start_reading_rewards.clear()
-                # collect rewards and dones
-                rewards = [0.0]*self.n_descendants_abs
-                dones = [0.0]*self.n_descendants_abs
-                for i in range(self.n_descendants_abs):
-                    rewards[i] = self.reward_shm[i]
-                    dones[i] = self.result_queues[i].get()
-                self.lock.release()
+            # collect results
+            results = []
+            for q in self.result_queues:
+                results.append(q.get())
 
-                # log to tensorboard if needed
-                if self.use_tensorboard:
-                    for r, d in zip(rewards, dones):
-                        evaluator.add(self.global_episode, d)
-                        self.tb_queue.put(("log", (self.global_episode, r, evaluator)))
-                        self.global_episode += 1
-                else:
-                    self.global_episode += self.n_descendants_abs
+            # flatten results
+            results = np.array([item for worker_result in results for item in worker_result])
+            
+            # send the results to each worker and let them train
+            for q in self.command_queues:
+                q.put(("train", results))
 
-                # log information to cmd-line
-                logger(self.global_episode, evaluator.successful_episodes, evaluator.successful_episodes_perc)
+            episode += self.episodes_per_batch
+            
+            # log to tensorboard if needed
+            if self.use_tensorboard:
+                mean_reward = np.mean(results[:, 2])
+                dones = results[:, 3]
+                evaluator.add_mult(episode, dones)
+                self.tb_queue.put(("log", (episode, mean_reward, evaluator)))
 
-            else:
-                raise ValueError("Received improper reset command: ", reset_command)
+            # log information to cmd-line
+            logger(episode, evaluator.successful_episodes, evaluator.successful_episodes_perc)
 
         self.clean_up()
         print('\nDone.\n')
@@ -153,11 +128,11 @@ class OpenAIES(ESAgent):
     def clean_up(self):
         print("Cleaning up ...")
         # shutdown all environments
-        [q.put("kill") for q in self.command_queues]
+        [q.put(("kill", None)) for q in self.command_queues]
         # shutdown TensorBoard logger
         if self.use_tensorboard:
             self.tb_queue.put(("kill", ()))
-        [worker.join() for worker in self.descendants]
+        [worker.join() for worker in self.workers]
 
 
 

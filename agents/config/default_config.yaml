@@ -27,7 +27,7 @@ Agent:
     use_tensorboard: no
     save_weights: no
     headless: no
-    save_weights_interval: 10 # save every 10 episodes
+    save_weights_interval: 10 # save every 10 episodes | For evolution strategies this is equal to "episodes_per_batch"
     seed: 94
     episodes: 40
     episode_length: 40
@@ -81,7 +81,9 @@ DDPG:
 # config for all ES agents
 ESAgent:
   Hyperparameters:
-    n_descendants: 2
+    n_workers: 2
+    episodes_per_batch: 1000
+    return_mode: centered_ranks   # either plain_rewards, utility_function or centered_ranks
     lr: 0.01
     sigma: 0.05
     layers_network:

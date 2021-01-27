@@ -15,17 +15,23 @@ class ESAgent(Agent):
 
         # setup some parameters
         hparams = self.cfg["ESAgent"]["Hyperparameters"]
-        self.global_episode = 0
-        self.n_descendants = hparams["n_descendants"]
-        self.n_descendants_abs = 2*self.n_descendants    # 2* because we use mirrored sampling
+        self.n_workers = hparams["n_workers"]
         self.lr = hparams["lr"]
         self.sigma = hparams["sigma"]
+        self.return_mode = hparams["return_mode"]
+        self.episodes_per_batch = hparams["episodes_per_batch"]
         self.layers_network = hparams["layers_network"]
-        if self.n_descendants_abs > 1 and not self.headless:
-            print("Turning headless mode on, since more than one descendant is running.")
+        if self.n_workers > 1 and not self.headless:
+            print("Turning headless mode on, since more than one worker is running.")
             self.headless = True
+        if self.episodes_per_batch % self.n_workers != 0:
+            corrected_episodes_per_batch = self.episodes_per_batch +\
+                                           (self.n_workers - self.episodes_per_batch % self.n_workers)
+            print("\nChanging the number of episodes per batch from %d to %d." % (self.episodes_per_batch,
+                                                                                corrected_episodes_per_batch))
+            self.episodes_per_batch = corrected_episodes_per_batch
         if self.save_weights:
-            self.save_weights_interval = utils.adjust_save_interval(self.save_weights_interval, self.n_descendants)
+            self.save_weights_interval = utils.adjust_save_interval(self.save_weights_interval, self.n_workers)
 
 
 class Network(tf.keras.Model):
