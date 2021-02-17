@@ -1,6 +1,7 @@
 import os
 import sys
 import multiprocessing as mp
+from copy import deepcopy
 
 import numpy as np
 
@@ -95,8 +96,9 @@ class OpenAIES(ESAgent):
         while episode < self.training_episodes:
 
             # trigger rollouts in threads
+            env_seed = episode
             for q in self.command_queues:
-                q.put(("run_n_episodes", int(self.episodes_per_batch/self.n_workers)))
+                q.put(("run_n_episodes", (int(self.episodes_per_batch/self.n_workers), env_seed)))
 
             # collect results
             results = []
@@ -108,7 +110,7 @@ class OpenAIES(ESAgent):
             
             # send the results to each worker and let them train
             for q in self.command_queues:
-                q.put(("train", results))
+                q.put(("train", deepcopy(results)))
 
             episode += self.episodes_per_batch
             

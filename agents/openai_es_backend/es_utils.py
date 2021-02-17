@@ -14,22 +14,17 @@ from agents.misc.camcorder import Camcorder
 #tf.keras.backend.set_floatx('float64')
 
 
-class ESOptimizer(tf.Module):
+class ESOptimizer:
     def __init__(self, weight_shapes, learning_rate, momentum=0.9):
-        super(ESOptimizer, self).__init__()
-        self.vs = [tf.Variable(tf.zeros(shape=shape, dtype=tf.float64), dtype=tf.float64) for shape in weight_shapes]
-        self.lr, self.momentum = tf.constant(learning_rate, dtype=tf.float64), tf.constant(momentum, dtype=tf.float64)
-
-    def apply_gradients(self, weights, cumulative_updates):
-        for weight_tensor, v, cum_up in zip(weights, self.vs, cumulative_updates):
-            v.assign(self.momentum * v + (1. - self.momentum) * cum_up)
-            weight_tensor.assign_add(self.lr * v)
+        self.vs = [np.zeros(shape=shape) for shape in weight_shapes]
+        self.lr = learning_rate
+        self. momentum = momentum
 
     def get_gradients(self, cumulative_updates):
-        grads = [tf.Variable(tf.zeros_like(v)) for v in self.vs]
-        for v, cum_up, grad in zip(self.vs, cumulative_updates, grads):
-            v.assign(self.momentum * v + (1. - self.momentum) * cum_up)
-            grad.assign(self.lr * v)
+        grads = [np.zeros_like(v) for v in self.vs]
+        for i in range(len(cumulative_updates)):
+            self.vs[i] = self.momentum * self.vs[i] + (1.0 - self.momentum) * cumulative_updates[i]
+            grads[i] = self.lr * self.vs[i]
         return grads
 
 
@@ -84,18 +79,18 @@ def job_worker(worker_id,
     model.predict(tf.zeros(shape=(1, dim_observations)))
 
     # each worker has an unique generator
-    generator = tf.random.Generator.from_seed(int(individual_seed), alg="philox")
-
-    # save the network parameters --> these need to stay the same for all worker
-    weights = model.get_weights()
-    weight_shapes = [tf.shape(w) for w in weights]
-
-    # setup an optimizer
-    optimizer = ESOptimizer(weight_shapes, lr)
+    generator = np.random.RandomState(int(individual_seed))
 
     if path_to_model:
         print("\nReading model from ", path_to_model, "...\n")
         model.load_weights(os.path.join(path_to_model, "weights", "variables", "variables"))
+
+    # save the network parameters --> these need to stay the same for all worker
+    weights = model.get_weights()
+    weight_shapes = [np.shape(w) for w in weights]
+
+    # setup an optimizer
+    optimizer = ESOptimizer(weight_shapes, lr)
 
     # we can save all enables camera inputs to root log dir if we want
     if save_camera_input:
@@ -107,8 +102,8 @@ def job_worker(worker_id,
         command, data = command_q.get()
         if command == "run_n_episodes":
 
-            # data in this command is number of episodes the descendant needs to run
-            n_episodes_worker = data
+            # data in this command is number of episodes the descendant needs to run and the seed of the environment
+            n_episodes_worker, env_seed = data
 
             if n_episodes_worker % 2 != 0:
                 raise ValueError("The number of episodes per descendant needs to be dividable by 2 as we use "
@@ -119,10 +114,13 @@ def job_worker(worker_id,
             while episode < n_episodes_worker:
 
                 # save the current state of the generator
-                state_generator = deepcopy(generator.state)
+                state_generator = deepcopy(generator.get_state())
 
                 """ 1. Run one episode with positive perturbations """
                 sign = 1
+
+                # set the numpy seed for the environment --> all descendants are evaluated on the same environment seed
+                np.random.seed(env_seed)
 
                 # set the weights of the model
                 model.set_weights(weights)
@@ -131,7 +129,7 @@ def job_worker(worker_id,
                 perturbate_weights(model, generator, sigma, sign)
 
                 # run one episode with the perturbated model
-                episode_return, was_done_once = run_one_episode(model, task, episode_length, obs_scaling_vector,
+                episode_return, was_done_once = run_n_episodes(1, model, task, episode_length, obs_scaling_vector,
                                                                 camcorder if save_camera_input else None)
 
                 # save the current state of the generator, the sign, the cumulated reward and the done
@@ -140,17 +138,20 @@ def job_worker(worker_id,
                 """ 2. Run one episode with negative perturbations """
                 sign = -1
 
+                # set the numpy seed for the environment --> all descendants are evaluated on the same environment seed
+                np.random.seed(env_seed)
+
                 # set the weights of the model
                 model.set_weights(weights)
 
                 # reset the state of the generator to be the same as for the positive perturbation
-                generator.reset(state_generator)
+                generator.set_state(state_generator)
 
                 # perturbate the weights of the model
                 perturbate_weights(model, generator, sigma, sign)
 
                 # run one episode with the perturbated model
-                episode_return, was_done_once = run_one_episode(model, task, episode_length, obs_scaling_vector,
+                episode_return, was_done_once = run_n_episodes(1, model, task, episode_length, obs_scaling_vector,
                                                                 camcorder if save_camera_input else None)
 
                 # save the current state of the generator, the sign, the cumulated reward and the done
@@ -171,7 +172,8 @@ def job_worker(worker_id,
 
             # calculate returns depending on the return mode
             if return_mode == "plain_rewards":
-                returns = rewards
+                sum_rewards = np.sum(rewards)
+                returns = (rewards / sum_rewards).astype(np.float32)
             elif return_mode == "utility_function":
                 rank_range = np.arange(0, len(rewards))
                 util = np.maximum(0, np.log(len(rewards) / 2 + 1) - np.log(rank_range))
@@ -192,14 +194,15 @@ def job_worker(worker_id,
 
             # update weights
             gradients = get_cumulative_grads(weight_shapes, returns, generator_states, signs, sigma, optimizer)
+            w_decay = 0.005
             for i in range(len(weights)):
-                weights[i] += gradients[i]
+                weights[i] = (1 - w_decay) * weights[i] + gradients[i]
 
             # set the weights to the model
             model.set_weights(weights)
 
             # save weights
-            if save_weights:
+            if save_weights and worker_id == 0:
                 path_to_dir = os.path.join(root_log_dir, "weights", "")
                 model.save(path_to_dir)
 
@@ -211,22 +214,27 @@ def job_worker(worker_id,
             raise ValueError("Sent command ", command, " not supported!")
 
 
-def run_one_episode(model, task, episode_length, obs_scaling_vector, camcorder):
-    episode_return = 0.0
-    was_done_once = 0
-    _, obs = task.reset()
-    for i in range(episode_length):
-        if camcorder:
-            camcorder.save(obs, task.get_all_graspable_object_poses())
-        if obs_scaling_vector is None:
-            action = model.predict(tf.constant([obs.get_low_dim_data()]))
-        else:
-            action = model.predict(tf.constant([obs.get_low_dim_data() / obs_scaling_vector]))
-        obs, reward, done = task.step(np.squeeze(action))
-        # cumulate reward
-        episode_return += reward
-        was_done_once |= done
-    return episode_return, was_done_once
+def run_n_episodes(n_episodes, model, task, episode_length, obs_scaling_vector, camcorder):
+    cumulated_returns = 0
+    all_dones = 0
+    for f in range(n_episodes):
+        episode_return = 0.0
+        was_done_once = 0
+        _, obs = task.reset()
+        for j in range(episode_length):
+            if camcorder:
+                camcorder.save(obs, task.get_all_graspable_object_poses())
+            if obs_scaling_vector is None:
+                action = model.predict(tf.constant([obs.get_low_dim_data()]))
+            else:
+                action = model.predict(tf.constant([obs.get_low_dim_data() / obs_scaling_vector]))
+            obs, reward, done = task.step(np.squeeze(action))
+            # cumulate reward
+            episode_return += reward
+            was_done_once |= done
+        cumulated_returns += episode_return
+        all_dones += was_done_once
+    return cumulated_returns, all_dones/n_episodes
 
 
 def tb_logger_job(root_log_dir, tb_queue):
@@ -253,27 +261,28 @@ def tb_logger_job(root_log_dir, tb_queue):
             raise ValueError("Sent command ", command, " for TensorBoard Logger not supported!")
 
 
-@tf.function
 def perturbate_weights(model, gen, sigma, sign):
-    weights = model.trainable_weights
-    for weight_tensor in weights:
-        noise = gen.normal(tf.shape(weight_tensor), dtype=tf.float64)
-        weight_tensor.assign_add(sign * sigma * noise)
+    weights = model.get_weights()
+    for i in range(len(weights)):
+        noise = gen.normal(size=np.shape(weights[i]))
+        weights[i] = weights[i] + noise * sign * sigma
+    model.set_weights(weights)
 
 
 def get_cumulative_grads(weights_shapes, returns, generator_states, signs, sigma, optimizer):
 
-    cumulative_updates = [tf.Variable(tf.zeros(shape=shape, dtype=tf.float64), dtype=tf.float64) for shape in weights_shapes]
+    cumulative_updates = [np.zeros(shape=shape) for shape in weights_shapes]
     batch_size = len(returns)
 
     # reconstruct noise
     for r, gen_state, sign in zip(returns, generator_states, signs):
         # recover noise vector from generator state
-        generator = tf.random.Generator.from_state(gen_state, alg="philox")
+        generator = np.random.RandomState()
+        generator.set_state(gen_state)
         # iterate over weight vector to create cumulative update
         for up, shape in zip(cumulative_updates, weights_shapes):
-            noise = generator.normal(shape=shape, dtype=tf.float64)
-            up.assign_add(r * sign * sigma * noise / batch_size)
+            noise = generator.normal(size=shape)
+            up += r * sign * noise / (batch_size * sigma)
 
     # update the weights of the training model
     grads = optimizer.get_gradients(cumulative_updates)
