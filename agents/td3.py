@@ -59,10 +59,7 @@ class TD3(DDPG):
                  action_mode,
                  obs_config,
                  task_class,
-                 agent_config,
-                 actor_noise_clipping=0.5,
-                 actor_update_frequency=2
-                 ):
+                 agent_config):
         """
         :param obs_config: configuration of the observation
         """
@@ -70,14 +67,12 @@ class TD3(DDPG):
         # call parent constructor
         super(TD3, self).__init__(action_mode, obs_config, task_class, agent_config)
 
-        self.policy_stddev = self.sigma
-        self.actor_noise_clipping = actor_noise_clipping
-        self.actor_update_frequency = actor_update_frequency
+        ddpg_hparams = self.cfg["DDPG"]["Hyperparameters"]
+        self.policy_stddev = ddpg_hparams["policy_stddev"]
+        self.actor_noise_clipping = ddpg_hparams["actor_noise_clipping"]
+        self.actor_update_frequency = ddpg_hparams["actor_update_frequency"]
         self.max_actions_w_gripper = tf.constant(self.max_actions + [1.0], dtype=tf.float64)
         self.training_step = tf.Variable(0,  dtype=tf.int32)
-
-        # use copying instead of "soft" updates
-        self.use_target_copying = False
 
         # --- define the critic and its target ---
         self.critic = CriticNetwork(self.layers_critic, dim_obs=self.dim_observations, dim_outputs=1)   # one Q-value per state needed
@@ -91,10 +86,6 @@ class TD3(DDPG):
         # --- copy weights to targets or load old model weights ---
         if type(self) == TD3:
             self.init_or_load_weights()
-
-        #TC = tf.keras.callbacks.TensorBoard(log_dir=self.root_log_dir)
-        #TC.set_model(model=self.actor)
-        #TC.set_model(model=self.critic)
 
     @tf.function
     def _compute_td_error(self, states, actions, rewards, next_states, dones):

@@ -80,6 +80,11 @@ class Agent(object):
             self.visual_rand_config = None
             self.randomize_every = None
 
+        # validation during training setup
+        self.make_validation_during_training = setup["make_validation_during_training"]
+        self.validation_interval = setup["validation_in_training_setup"]["validation_interval"]
+        self.n_validation_episodes = setup["validation_in_training_setup"]["n_validation_episodes"]
+
         # set seed of random and numpy
         random.seed(self.seed)
         np.random.seed(self.seed)
@@ -88,6 +93,9 @@ class Agent(object):
         # set dimensions
         self.dim_observations = self.cfg["Robot"]["Dimensions"]["observations"]
         self.dim_actions = self.cfg["Robot"]["Dimensions"]["actions"]
+
+        # check if we use a gripper action or not
+        self.keep_gripper_open = self.cfg["Robot"]["keep_gripper_open"]
 
         # add an custom/unique id for logging
         if not self.root_log_dir:
@@ -125,16 +133,27 @@ class Agent(object):
         self.gripper_joint_pos_limits = np.array(robot_limits["gripper_pos"])
         # gripper touch forces -> 2* x,y,z
         self.gripper_force_limits = np.array(robot_limits["gripper_force"])
-        # concatenate to scaling vector
+        # robot limits
+        robot_limits_for_scaling = [self.gripper_open_limits, self.joint_vel_limits, self.joint_pos_limits_rad,
+                                    self.joint_force_limits, self.gripper_pose_limits, self.gripper_joint_pos_limits,
+                                    self.gripper_force_limits]
+        robot_obs_config = [self.obs_config.gripper_open, self.obs_config.joint_velocities,
+                            self.obs_config.joint_positions, self.obs_config.joint_forces, self.obs_config.gripper_pose,
+                            self.obs_config.gripper_joint_positions, self.obs_config.gripper_touch_forces]
+        filtered_limits = [limit for active, limit in zip(robot_obs_config, robot_limits_for_scaling) if active]
+
+        # redundancy resolution setup
+        self.use_redundancy_resolution = setup["use_redundancy_resolution"]
+        if self.use_redundancy_resolution:
+            self.redundancy_resolution_setup = setup["redundancy_resolution_setup"]
+            self.redundancy_resolution_setup["ref_position"] = np.array(self.redundancy_resolution_setup["ref_position"])
+        else:
+            self.redundancy_resolution_setup = None
+
+            # concatenate to scaling vector
         if self.scale_robot_observations:
             # only the robot state is scaled
-            self.obs_scaling_vector = np.concatenate((self.gripper_open_limits,
-                                                      self.joint_vel_limits,
-                                                      self.joint_pos_limits_rad,
-                                                      self.joint_force_limits,
-                                                      self.gripper_pose_limits,
-                                                      self.gripper_joint_pos_limits,
-                                                      self.gripper_force_limits))
+            self.obs_scaling_vector = np.concatenate(filtered_limits)
             # append with ones for low-dim task state
             self.obs_scaling_vector = np.append(
                 self.obs_scaling_vector, np.ones(self.dim_observations - len(self.obs_scaling_vector)))
@@ -142,16 +161,13 @@ class Agent(object):
         else:
             self.obs_scaling_vector = None
 
-        if not self.only_low_dim_obs:
-            raise ValueError("High-dim observations currently not supported!")
-
     def run_validation(self, model):
         """ Runs validation for presentation purposes
         :param model: Tensorflow model for action prediction
         """
         if self.rand_env:
             env = DomainRandomizationEnvironment(action_mode=self.action_mode, obs_config=self.obs_config,
-                                                 headless=False, randomize_every=self.randomize_every,
+                                                 headless=self.headless, randomize_every=self.randomize_every,
                                                  visual_randomization_config=self.visual_rand_config)
         else:
             env = Environment(action_mode=self.action_mode, obs_config=self.obs_config, headless=False)
@@ -162,8 +178,11 @@ class Agent(object):
         observation = None
         episode = 0
         step = 0
+        done = False
+        E = np.zeros(7)
         logger = CmdLineLogger(self.logging_interval, self.training_episodes, 1)
         evaluator = SuccessEvaluator()
+        max_action = 0
         while episode < self.training_episodes:
             # reset episode if maximal length is reached or all worker are done
             if step % self.episode_length == 0:
@@ -176,7 +195,19 @@ class Agent(object):
                 step = 0
                 episode += 1
 
+            # predict action
             actions = np.squeeze(model.predict(tf.constant([observation])))
+            # check if we need to resolve redundancy
+            if self.use_redundancy_resolution:
+                ref_pos = self.redundancy_resolution_setup["ref_position"]
+                alpha = self.redundancy_resolution_setup["alpha"]
+                actions[0:7] = task.resolve_redundancy_joint_velocities(actions[0:7], ref_pos, alpha)
+
+            # check if we need to use a gripper actions
+            if self.keep_gripper_open:
+                actions[7] = 1
+
+            # increment simulation
             next_observation, reward, done = task.step(actions)
             if self.obs_scaling_vector is not None:
                 next_observation = next_observation.get_low_dim_data() / self.obs_scaling_vector
@@ -185,6 +216,9 @@ class Agent(object):
             evaluator.add(episode, done)
             observation = next_observation
             step += 1
+
+
+        #print("Mean Error: ", np.mean(E))
         env.shutdown()
         print("\nDone.\n")
 

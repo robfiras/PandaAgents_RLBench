@@ -34,16 +34,14 @@ def job_worker(worker_id,
                task_class,
                command_q: mp.Queue,
                result_q: mp.Queue,
-               layers_network,
+               es_hparams,
                dim_actions,
                max_actions,
+               keep_gripper_open,
                obs_scaling_vector,
-               lr,
                dim_observations,
                common_seed,
                individual_seed,
-               sigma,
-               return_mode,
                episode_length,
                headless,
                save_weights,
@@ -52,7 +50,16 @@ def job_worker(worker_id,
                rand_env,
                visual_rand_config,
                randomize_every,
+               redundancy_resolution_setup,
                path_to_model):
+
+    # setup hyperparameter
+    layers_network = es_hparams["layers_network"]
+    sigma = es_hparams["sigma"]
+    lr = es_hparams["lr"]
+    return_mode = es_hparams["return_mode"]
+    weight_decay = es_hparams["weight_decay"]
+    episodes_per_perturbation = es_hparams["episodes_per_perturbation"]
 
     # do not allow to run on GPU (does not work for multiple processes at the same time)
     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
@@ -80,6 +87,10 @@ def job_worker(worker_id,
 
     # each worker has an unique generator
     generator = np.random.RandomState(int(individual_seed))
+
+    if path_to_model:
+        print("\nReading model from ", path_to_model, "...\n")
+        model.load_weights(os.path.join(path_to_model, "weights", "variables", "variables"))
 
     if path_to_model:
         print("\nReading model from ", path_to_model, "...\n")
@@ -129,11 +140,14 @@ def job_worker(worker_id,
                 perturbate_weights(model, generator, sigma, sign)
 
                 # run one episode with the perturbated model
-                episode_return, was_done_once = run_n_episodes(1, model, task, episode_length, obs_scaling_vector,
-                                                                camcorder if save_camera_input else None)
+                cumulated_return, dones = run_n_episodes(episodes_per_perturbation, model, task, episode_length,
+                                                         obs_scaling_vector,
+                                                         camcorder if save_camera_input else None,
+                                                         redundancy_resolution_setup, keep_gripper_open)
+                dones /= episodes_per_perturbation
 
                 # save the current state of the generator, the sign, the cumulated reward and the done
-                results_episodes.append((state_generator, sign, episode_return, was_done_once))
+                results_episodes.append((state_generator, sign, cumulated_return, dones))
 
                 """ 2. Run one episode with negative perturbations """
                 sign = -1
@@ -151,16 +165,32 @@ def job_worker(worker_id,
                 perturbate_weights(model, generator, sigma, sign)
 
                 # run one episode with the perturbated model
-                episode_return, was_done_once = run_n_episodes(1, model, task, episode_length, obs_scaling_vector,
-                                                                camcorder if save_camera_input else None)
+                cumulated_return, dones = run_n_episodes(episodes_per_perturbation, model, task, episode_length,
+                                                         obs_scaling_vector,
+                                                         camcorder if save_camera_input else None,
+                                                         redundancy_resolution_setup, keep_gripper_open)
+                dones /= episodes_per_perturbation
 
                 # save the current state of the generator, the sign, the cumulated reward and the done
-                results_episodes.append((state_generator, sign, episode_return, was_done_once))
+                results_episodes.append((state_generator, sign, cumulated_return, dones))
 
                 episode += 2
 
             # send the results to the master
             result_q.put(results_episodes)
+
+        elif command == "validate":
+
+            n_episodes_worker_valid, global_episode = data
+            cumulated_return, dones = run_n_episodes(n_episodes_worker_valid, model, task, episode_length,
+                                                     obs_scaling_vector, None, redundancy_resolution_setup,
+                                                     keep_gripper_open)
+            # save weights
+            if worker_id == 0:
+                path_to_dir = os.path.join(root_log_dir, "weights_validation", "episode_%d" % global_episode, "")
+                model.save(path_to_dir)
+
+            result_q.put((dones, cumulated_return))
 
         elif command == "train":
 
@@ -194,9 +224,8 @@ def job_worker(worker_id,
 
             # update weights
             gradients = get_cumulative_grads(weight_shapes, returns, generator_states, signs, sigma, optimizer)
-            w_decay = 0.005
             for i in range(len(weights)):
-                weights[i] = (1 - w_decay) * weights[i] + gradients[i]
+                weights[i] = (1 - weight_decay) * weights[i] + gradients[i]
 
             # set the weights to the model
             model.set_weights(weights)
@@ -206,6 +235,8 @@ def job_worker(worker_id,
                 path_to_dir = os.path.join(root_log_dir, "weights", "")
                 model.save(path_to_dir)
 
+            result_q.put("done")
+
         elif command == "kill":
             print("Killing worker %d" % worker_id)
             env.shutdown()
@@ -214,7 +245,8 @@ def job_worker(worker_id,
             raise ValueError("Sent command ", command, " not supported!")
 
 
-def run_n_episodes(n_episodes, model, task, episode_length, obs_scaling_vector, camcorder):
+def run_n_episodes(n_episodes, model, task, episode_length, obs_scaling_vector,
+                   camcorder, redundancy_resolution_setup, keep_gripper_open):
     cumulated_returns = 0
     all_dones = 0
     for f in range(n_episodes):
@@ -228,19 +260,29 @@ def run_n_episodes(n_episodes, model, task, episode_length, obs_scaling_vector, 
                 action = model.predict(tf.constant([obs.get_low_dim_data()]))
             else:
                 action = model.predict(tf.constant([obs.get_low_dim_data() / obs_scaling_vector]))
-            obs, reward, done = task.step(np.squeeze(action))
+            action = np.squeeze(action)
+            if redundancy_resolution_setup is not None:
+                ref_pos = redundancy_resolution_setup["ref_position"]
+                alpha = redundancy_resolution_setup["alpha"]
+                action[0:7] = task.resolve_redundancy_joint_velocities(actions=action[0:7], reference_position=ref_pos,
+                                                                       alpha=alpha)
+            # check if we need to use a gripper actions
+            if keep_gripper_open:
+                action[7] = 1
+            obs, reward, done = task.step(action)
             # cumulate reward
             episode_return += reward
             was_done_once |= done
         cumulated_returns += episode_return
         all_dones += was_done_once
-    return cumulated_returns, all_dones/n_episodes
+    return cumulated_returns, all_dones
 
 
 def tb_logger_job(root_log_dir, tb_queue):
 
     import tensorflow as tf
 
+    root_log_dir = os.path.join(root_log_dir, "tb_train", "")
     summary_writer = tf.summary.create_file_writer(logdir=root_log_dir)
     while True:
 
@@ -254,6 +296,26 @@ def tb_logger_job(root_log_dir, tb_queue):
                 tf.summary.scalar(('Proportion of successful episode in last %d episodes' %
                                    evaluator.percentage_interval),
                                   evaluator.successful_episodes_perc, step=episode)
+        elif command == "kill":
+            print("Killing TensorBoard Logger")
+            break
+        else:
+            raise ValueError("Sent command ", command, " for TensorBoard Logger not supported!")
+
+
+def tb_logger_job_validation(root_log_dir, tb_queue):
+
+    from agents.misc.tensorboard_logger import TensorBoardLoggerValidation
+
+    logger = TensorBoardLoggerValidation(root_log_dir)
+    while True:
+
+        command, data = tb_queue.get()
+        if command == "log":
+            episode, n_validation_episodes, avg_reward_per_episode, n_success_episodes = data
+
+            logger(episode, n_validation_episodes, avg_reward_per_episode, n_success_episodes)
+
         elif command == "kill":
             print("Killing TensorBoard Logger")
             break

@@ -1,5 +1,7 @@
 import os
 import sys
+import multiprocessing as mp
+import time
 
 import numpy as np
 import tensorflow as tf
@@ -9,8 +11,8 @@ from agents.ddpg_backend.replay_buffer import ReplayBuffer
 from agents.ddpg_backend.prio_replay_buffer import PrioReplayBuffer
 from agents.ddpg_backend.ou_noise import OUNoise
 from agents.misc.logger import CmdLineLogger
-from agents.misc.tensorboard_logger import TensorBoardLogger
-from agents.base_rl import RLAgent
+from agents.misc.tensorboard_logger import TensorBoardLogger, TensorBoardLoggerValidation
+from agents.base_rl import RLAgent, job_worker_validation
 import agents.misc.utils as utils
 
 # tf.config.run_functions_eagerly(True)
@@ -175,6 +177,9 @@ class DDPG(RLAgent):
         self.start_training = setup["start_training"]
         self.use_ou_noise = setup["use_ou_noise"]
         self.use_target_copying = setup["use_target_copying"]
+        self.save_dones_in_buffer = setup["save_dones_in_buffer"]
+        self.use_fixed_importance_sampling = setup["use_fixed_importance_sampling"]
+        self.importance_sampling_weight = setup["importance_sampling_weight"]
         self.interval_copy_target = setup["interval_copy_target"]
         self.global_step_main = 0
         self.global_episode = 0
@@ -228,6 +233,27 @@ class DDPG(RLAgent):
         self.summary_writer = None
         if self.use_tensorboard:
             self.tensorboard_logger = TensorBoardLogger(root_log_dir=self.root_log_dir)
+
+        # setup tensorboard for validation
+        if self.make_validation_during_training:
+            self.tensorboard_logger_validation = TensorBoardLoggerValidation(root_log_dir=self.root_log_dir)
+            # change number of validation episodes to match number of workers
+            remainder = self.validation_interval % self.n_workers if self.validation_interval >= self.n_workers else \
+                self.n_workers % self.validation_interval
+            if remainder != 0:
+                if self.validation_interval >= self.n_workers:
+                    new_valid_interval = self.validation_interval + (self.n_workers - remainder)
+                else:
+                    new_valid_interval = self.validation_interval + remainder
+                if new_valid_interval - self.validation_interval > 20:
+                    question = "Validation interval need to be adjusted from %d to %d. The difference is quite huge, " \
+                               "do you want to proceed anyway?" % (self.validation_interval, new_valid_interval)
+                    if not utils.query_yes_no(question):
+                        print("Terminating ...")
+                        sys.exit()
+                print("\nChanging validation interval from %d to %d to align with number of workers.\n" %
+                      (self.validation_interval, new_valid_interval))
+                self.validation_interval = new_valid_interval
 
         # --- define actor and its target---
         self.actor = ActorNetwork(self.layers_actor, self.dim_actions, self.max_actions, sigma=self.sigma, use_ou_noise=self.use_ou_noise)
@@ -285,15 +311,40 @@ class DDPG(RLAgent):
 
             # reset episode if maximal length is reached or all worker are done
             if self.global_step_main % self.episode_length == 0 or not running_workers:
+
+                if self.global_step_main != 0:
+                    self.global_episode += self.n_workers
+                    step_in_episode = 0
+
+                # check if we need to make validation
+                validation_condition = (self.make_validation_during_training and self.global_step_main != 0 and
+                                        self.global_episode % self.validation_interval == 0)
+                if validation_condition:
+                    print("Validating on %d episodes ..." % self.n_validation_episodes)
+                    val_start_time = time.time()
+
+                    # run validation
+                    number_of_succ_episodes_validation, cumulated_reward_validation = self.run_validation_in_training()
+                    val_duration = time.time() - val_start_time
+                    avg_reward_per_episode = cumulated_reward_validation / (self.n_validation_episodes+self.n_workers)
+                    print("Proportion of successful episodes %f and average reward per episode %f | Duration %f sec.\n" %
+                          (number_of_succ_episodes_validation / self.n_validation_episodes,
+                           avg_reward_per_episode, val_duration))
+                    # save validation weights
+                    path_to_dir = os.path.join(self.root_log_dir, "weights_validation",
+                                               "episode_%d" % self.global_episode, "")
+                    self.actor.save(path_to_dir + "actor")
+
+                    # log to tensorboard
+                    self.tensorboard_logger_validation(self.global_episode, self.n_validation_episodes,
+                                                       avg_reward_per_episode, number_of_succ_episodes_validation)
+
                 obs = []
                 # init a list of worker (connections) which haven't finished their episodes yet -> all at reset
                 running_workers = self.worker_conn.copy()
 
                 # reset workers
                 self.all_worker_reset(running_workers, obs)
-                if self.global_step_main != 0:
-                    self.global_episode += self.n_workers
-                    step_in_episode = 0
 
                 # save weights if needed
                 save_cond = (self.save_weights and self.global_episode % self.save_weights_interval == 0 and
@@ -381,6 +432,84 @@ class DDPG(RLAgent):
         self.clean_up()
         print('\nDone.\n')
 
+    def run_validation_in_training(self):
+        """
+        Runs validation during training. Config file specifies validation parameters.
+        :return: number_of_successful_episodes, cumulated_reward
+        """
+        # setup the queues
+        command_queue_valid = [mp.Queue() for i in range(self.n_workers)]
+        result_queue_valid = [mp.Queue() for i in range(self.n_workers)]
+
+        # sample seed
+        seed = np.random.randint(0, 2 ** 32 - 1, dtype=np.uint32)
+
+        # start all validation workers
+        workers_valid = [mp.Process(target=job_worker_validation,
+                                    args=(worker_id,
+                                          self.action_mode,
+                                          self.obs_config,
+                                          self.task_class,
+                                          command_queue_valid[worker_id],
+                                          result_queue_valid[worker_id],
+                                          self.obs_scaling_vector,
+                                          seed)) for worker_id in range(self.n_workers)]
+        for worker in workers_valid:
+            worker.start()
+
+        # setup connection to workers
+        valid_worker_conn = [{"command_queue": cq,
+                              "result_queue": rq,
+                              "index": idx} for cq, rq, idx in zip(command_queue_valid,
+                                                                   result_queue_valid,
+                                                                   range(self.n_workers))]
+
+        # setup validation run
+        obs = []
+        reward = []
+        next_obs = []
+        done = []
+        running_validation_workers = []
+        number_of_succ_episodes = 0
+        cumulated_reward = 0
+        episode = 0
+        step_in_current_episode = 0
+        while episode < self.n_validation_episodes:
+
+            # reset episode if maximal length is reached or all worker are done
+            if step_in_current_episode % self.episode_length == 0 or not running_validation_workers:
+                obs = []
+                # init a list of worker (connections) which haven't finished their episodes yet -> all at reset
+                running_validation_workers = valid_worker_conn.copy()
+
+                # reset workers
+                self.all_worker_reset(running_validation_workers, obs)
+                if step_in_current_episode != 0:
+                    episode += self.n_workers
+                    step_in_current_episode = 0
+
+            # predict action with actor
+            action = self.get_action(obs, mode="greedy")
+
+            # make a step in validation workers
+            self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
+                                 done=done, running_workers=running_validation_workers, add_data_to_buffer=False)
+
+            # increment and save next_obs as obs
+            step_in_current_episode += 1
+            number_of_succ_episodes += np.sum(done)
+            cumulated_reward += np.sum(reward)
+            obs = next_obs
+            next_obs = []
+            reward = []
+            done = []
+
+        # kill validation workers
+        [q.put(("kill", ())) for q in command_queue_valid]
+        [worker.join() for worker in workers_valid]
+
+        return number_of_succ_episodes, cumulated_reward
+
     def all_worker_reset(self, running_workers, obs):
         """
         Resets the episodes of all all workers
@@ -395,7 +524,7 @@ class DDPG(RLAgent):
             descriptions, single_obs = w["result_queue"].get()
             obs.append(single_obs)
 
-    def all_worker_step(self, obs, action, reward, next_obs, done, running_workers):
+    def all_worker_step(self, obs, action, reward, next_obs, done, running_workers, add_data_to_buffer=True):
         """
         Increments the simulation in all running workers, receives the new data and adds it to the replay buffer.
         :param obs: list of observations to be filled
@@ -404,6 +533,7 @@ class DDPG(RLAgent):
         :param next_obs: list of next observations to be filled
         :param done: list of dones to be filled
         :param running_workers: list of running worker connections
+        :param add_data_to_buffer: if true, adds the data to the buffer
         """
         for w, a in zip(running_workers, action):
             w["command_queue"].put(("step", (a,)))
@@ -412,8 +542,10 @@ class DDPG(RLAgent):
         finished_workers = []
         for w, o, a, e in zip(running_workers, obs, action, range(self.n_workers)):
             single_next_obs, single_reward, single_done = w["result_queue"].get()
-            self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
-                                      float(0), (e+self.global_episode))    # we do not save dones as we treat all tasks as continues tasks
+            if add_data_to_buffer:
+                self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
+                                          float(single_done) if self.save_dones_in_buffer else float(0),
+                                          (e+self.global_episode))
             next_obs.append(single_next_obs)
             reward.append(single_reward)
             done.append(single_done)
@@ -459,14 +591,19 @@ class DDPG(RLAgent):
         else:
             raise ValueError("%s not allowed as mode! Choose either greedy, greedy+noise, random or eps-greedy-random." % mode)
 
+        if self.keep_gripper_open:
+            actions[:, 7] = 1
+
         return actions
 
-    def save_all_models(self):
-        path_to_dir = os.path.join(self.root_log_dir, "weights", "")
-        self.actor.save(path_to_dir + "actor")
-        # self.target_actor.save(path_to_dir + "target_actor")
-        self.critic.save(path_to_dir + "critic")
-        # self.target_critic.save(path_to_dir + "target_critic")
+    def save_all_models(self, non_default_path=None):
+        if not non_default_path:
+            path_to_dir = os.path.join(self.root_log_dir, "weights", "")
+            self.actor.save(path_to_dir + "actor")
+            self.critic.save(path_to_dir + "critic")
+        else:
+            self.actor.save(non_default_path + "actor")
+            self.critic.save(non_default_path + "critic")
 
     def init_or_load_weights(self):
         # --- actor
@@ -520,7 +657,9 @@ class DDPG(RLAgent):
         if self.replay_buffer_mode == "VANILLA":
             crit_loss, act_loss, td_errors = self.train_inner(states, actions, rewards, next_states, dones)
         elif self.replay_buffer_mode == "PER_PYTHON" or self.replay_buffer_mode == "PER_CPP":
-            crit_loss, act_loss, td_errors = self.train_inner(states, actions, rewards, next_states, dones, is_weights)
+            crit_loss, act_loss, td_errors = self.train_inner(states, actions, rewards, next_states, dones,
+                                                              is_weights if not self.use_fixed_importance_sampling else
+                                                              self.importance_sampling_weight)
             # update prioritized replay buffer
             self.replay_buffer.update_mult(tree_idxs, td_errors)
 
@@ -536,10 +675,6 @@ class DDPG(RLAgent):
             # lets use a squared error for errors less than 1 and a linear error for errors greater than 1 to reduce
             # the impact of very large errors
             critic_loss = tf.reduce_mean(tf.square(td_errors_is))
-            #td_errors = tf.abs(td_errors)
-            #clipped_td_errors = tf.clip_by_value(td_errors, 0.0, 1.0)
-            #linear_errors = 2 * (td_errors - clipped_td_errors)
-            #critic_loss = tf.reduce_mean(tf.square(clipped_td_errors) + linear_errors)
 
         # calculate the gradients and optimize
         critic_gradients = tape.gradient(critic_loss, self.critic.trainable_variables)
@@ -558,8 +693,6 @@ class DDPG(RLAgent):
         # update target weights
         if self.use_target_copying:
             if self.global_step_main % self.interval_copy_target == 0 and self.global_step_main > 10:
-                #update_target_variables(self.target_critic.weights, self.critic.weights, 1.0)
-                #update_target_variables(self.target_actor.weights, self.actor.weights, 1.0)
                 self.target_actor.set_weights(self.actor.get_weights())
                 self.target_critic.set_weights(self.critic.get_weights())
         else:

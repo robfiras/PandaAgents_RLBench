@@ -1,11 +1,15 @@
 import random
 from enum import Enum
+import numpy as np
 
 from agents.ddpg_backend.replay_buffer import ReplayBuffer
 from agents.ddpg_backend.sum_tree import SumTree
-from sum_tree_cpp import SumTreeCpp
-
-import numpy as np
+try:
+    loaded_sum_tree_cpp = True
+    from sum_tree_cpp import SumTreeCpp
+except:
+    loaded_sum_tree_cpp = False
+    print("Could not load SumTreeCpp. Falling back to Python implementation...")
 
 
 class PrioReplayBufferType(Enum):
@@ -22,7 +26,7 @@ class PrioReplayBuffer(ReplayBuffer):
                                                path_to_db_read, path_to_db_write, write, save_interval)
 
         # set type of prio buffer extension -> either C++ or Python
-        if use_cpp:
+        if use_cpp and loaded_sum_tree_cpp:
             self.prio_buffer_type = PrioReplayBufferType.CPP
         else:
             self.prio_buffer_type = PrioReplayBufferType.PYTHON

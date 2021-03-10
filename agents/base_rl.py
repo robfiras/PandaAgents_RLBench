@@ -1,3 +1,5 @@
+import os
+import sys
 import multiprocessing as mp
 
 import numpy as np
@@ -48,6 +50,7 @@ class RLAgent(Agent):
                                          self.rand_env,
                                          self.visual_rand_config,
                                          self.randomize_every,
+                                         self.redundancy_resolution_setup,
                                          self.headless)) for worker_id in range(self.n_workers)]
         for worker in self.workers:
             worker.start()
@@ -63,6 +66,7 @@ def job_worker(worker_id, action_mode,
                rand_env,
                visual_rand_config,
                randomize_every,
+               redundancy_resolution_setup,
                headless):
 
     np.random.seed(worker_id)
@@ -96,9 +100,53 @@ def job_worker(worker_id, action_mode,
             result_q.put((descriptions, observation))
         elif command_type == "step":
             actions = command_args[0]
+            # check if we need to resolve redundancy
+            if redundancy_resolution_setup is not None:
+                ref_pos = redundancy_resolution_setup["ref_position"]
+                alpha = redundancy_resolution_setup["alpha"]
+                actions[0:7] = task.resolve_redundancy_joint_velocities(actions=actions[0:7],
+                                                                        reference_position=ref_pos, alpha=alpha)
             next_observation, reward, done = task.step(actions)
             if save_camera_input:
                 camcorder.save(next_observation, task.get_robot_visuals(), task.get_all_graspable_objects())
+            if obs_scaling is not None:
+                next_observation = next_observation.get_low_dim_data() / obs_scaling
+            else:
+                next_observation = next_observation.get_low_dim_data()
+            result_q.put((next_observation, reward, done))
+        elif command_type == "kill":
+            print("Killing worker %d" % worker_id)
+            env.shutdown()
+            break
+            
+
+def job_worker_validation(worker_id, action_mode,
+                          obs_config, task_class,
+                          command_q: mp.Queue,
+                          result_q: mp.Queue,
+                          obs_scaling, seed):
+
+    np.random.seed(worker_id+seed)
+    # setup the environment
+    env = Environment(action_mode=action_mode, obs_config=obs_config, headless=True)
+    env.launch()
+    task = env.get_task(task_class)
+    task.reset()
+    while True:
+        command = command_q.get()
+        command_type = command[0]
+        command_args = command[1]
+        if command_type == "reset":
+            task.set_variation(task.sample_variation())
+            descriptions, observation = task.reset()
+            if obs_scaling is not None:
+                observation = observation.get_low_dim_data() / obs_scaling
+            else:
+                observation = observation.get_low_dim_data()
+            result_q.put((descriptions, observation))
+        elif command_type == "step":
+            actions = command_args[0]
+            next_observation, reward, done = task.step(actions)
             if obs_scaling is not None:
                 next_observation = next_observation.get_low_dim_data() / obs_scaling
             else:

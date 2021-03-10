@@ -34,10 +34,25 @@ Agent:
     logging_interval: 10
     scale_robot_observations: yes # if set robot observations are normalized
     save_camera_input: yes # if set all enabled cameras inputs are saved at root log dir
-    domain_randomization_environment: no
+    domain_randomization_environment: no  # if no, domain_randomization_setup has no effect
     domain_randomization_setup:
       image_directory: null
       randomize_every: episode # either episode, variation or transition
+    make_validation_during_training: no # if no validation_in_training_setup has no effect
+    validation_in_training_setup:
+      validation_interval: 1000 # interval of training episodes after which validation is done
+      n_validation_episodes: 1000 # number of episodes for validation
+    use_redundancy_resolution: no
+    redundancy_resolution_setup:
+      ref_position:
+        - 0.0
+        - -0.82
+        - 0.0
+        - -2.15
+        - 0.0
+        - 1.75
+        - 0.75
+      alpha: 1.0
   Task: PickAndLift # until now only ReachTarget or PickAndLift (more coming soon)
 
 # config for all RL agents
@@ -56,6 +71,9 @@ DDPG:
     start_training: 500000  # steps before training starts
     buffer_size: 1000000
     use_ou_noise: no # use ou noise instead of Gaussian noise
+    save_dones_in_buffer: no  # if false, task is continuous
+    use_fixed_importance_sampling: no # if true, importance_sampling_weight is set, else calculated automatically
+    importance_sampling_weight: 1.0
 
   Hyperparameters:
     gamma: 0.99
@@ -75,14 +93,17 @@ DDPG:
       - 400
       - 300
     # only for TD3:
+    policy_stddev: 0.1 # regularization noise added to actions during training -> different from sigma!
     actor_noise_clipping: 0.5
-    actor_update_frequence: 2
+    actor_update_frequency: 20
 
 # config for all ES agents
 ESAgent:
   Hyperparameters:
     n_workers: 2
-    episodes_per_batch: 1000
+    perturbations_per_batch: 1000
+    episodes_per_perturbation: 1   # number of episode each perturbation is evaluated for
+    weight_decay: 0.001
     return_mode: centered_ranks   # either plain_rewards, utility_function or centered_ranks
     lr: 0.01
     sigma: 0.05
@@ -92,6 +113,7 @@ ESAgent:
 
 # some Panda specific parameters
 Robot:
+  keep_gripper_open: no # disables gripper action and keeps gripper open
   Dimensions:
     observations: 47
     actions: 8

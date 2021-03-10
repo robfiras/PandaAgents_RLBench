@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import tensorflow as tf
 
@@ -14,22 +16,41 @@ class ESAgent(Agent):
         super(ESAgent, self).__init__(action_mode, obs_config, task_class, agent_config)
 
         # setup some parameters
-        hparams = self.cfg["ESAgent"]["Hyperparameters"]
-        self.n_workers = hparams["n_workers"]
-        self.lr = hparams["lr"]
-        self.sigma = hparams["sigma"]
-        self.return_mode = hparams["return_mode"]
-        self.episodes_per_batch = hparams["episodes_per_batch"]
-        self.layers_network = hparams["layers_network"]
+        self.es_hparams = self.cfg["ESAgent"]["Hyperparameters"]
+        self.n_workers = self.es_hparams["n_workers"]
+        self.perturbations_per_batch = self.es_hparams["perturbations_per_batch"]
         if self.n_workers > 1 and not self.headless:
             print("Turning headless mode on, since more than one worker is running.")
             self.headless = True
-        if self.episodes_per_batch % self.n_workers != 0:
-            corrected_episodes_per_batch = self.episodes_per_batch +\
-                                           (self.n_workers - self.episodes_per_batch % self.n_workers)
-            print("\nChanging the number of episodes per batch from %d to %d." % (self.episodes_per_batch,
-                                                                                corrected_episodes_per_batch))
-            self.episodes_per_batch = corrected_episodes_per_batch
+        if self.perturbations_per_batch % self.n_workers != 0:
+            corrected_perturbations_per_batch = self.perturbations_per_batch +\
+                                           (self.n_workers - self.perturbations_per_batch % self.n_workers)
+            print("\nChanging the number of peturbations per batch from %d to %d." % (self.perturbations_per_batch,
+                                                                                      corrected_perturbations_per_batch))
+            self.perturbations_per_batch = corrected_perturbations_per_batch
+
+        # correct validation interval
+        if self.make_validation_during_training:
+            # change number of validation episodes to match number of workers
+            if self.validation_interval >= self.perturbations_per_batch:
+                remainder = self.validation_interval % self.perturbations_per_batch
+            else:
+                remainder = self.perturbations_per_batch % self.validation_interval
+            if remainder != 0:
+                if self.validation_interval >= self.perturbations_per_batch:
+                    new_valid_interval = self.validation_interval + (self.n_workers - remainder)
+                else:
+                    new_valid_interval = self.validation_interval + remainder
+                if new_valid_interval - self.validation_interval > 20:
+                    question = "Validation interval need to be adjusted from %d to %d. The difference is quite huge, " \
+                               "do you want to proceed anyway?" % (self.validation_interval, new_valid_interval)
+                    if not utils.query_yes_no(question):
+                        print("Terminating ...")
+                        sys.exit()
+                print("\nChanging validation interval from %d to %d to align with number of workers.\n" %
+                      (self.validation_interval, new_valid_interval))
+                self.validation_interval = new_valid_interval
+
         if self.save_weights:
             self.save_weights_interval = utils.adjust_save_interval(self.save_weights_interval, self.n_workers)
 
@@ -44,7 +65,7 @@ class Network(tf.keras.Model):
 
         # check if default activations should be used (relus)
         if not activations:
-            activations = ["relu"] * len(units_hidden_layers)
+            activations = ["tanh"] * len(units_hidden_layers)
 
         self.seed = seed
         glorot_init = tf.keras.initializers.GlorotUniform(seed=self.seed)
