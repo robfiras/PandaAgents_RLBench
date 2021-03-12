@@ -40,7 +40,8 @@ class TensorBoardLoggerValidation:
         self.root_log_dir = os.path.join(root_log_dir, "tb_valid", "")
         self.summary_writer = tf.summary.create_file_writer(logdir=self.root_log_dir)
 
-    def __call__(self, curr_training_episode, n_validation_episodes, avg_reward_per_episode, n_success_episodes):
+    def __call__(self, curr_training_episode, n_validation_episodes,
+                 avg_reward_per_episode, n_success_episodes, avg_episode_length):
         with self.summary_writer.as_default():
             tf.summary.scalar('Validation | Average Reward per Episode', avg_reward_per_episode,
                               step=curr_training_episode)
@@ -49,4 +50,8 @@ class TensorBoardLoggerValidation:
                               step=curr_training_episode)
 
             tf.summary.scalar('Validation | Proportion of successful Episodes', n_success_episodes/n_validation_episodes,
+                              step=curr_training_episode)
+
+            tf.summary.scalar('Validation | Average Episode Length',
+                              avg_episode_length,
                               step=curr_training_episode)

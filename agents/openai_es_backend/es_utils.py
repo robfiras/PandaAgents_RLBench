@@ -312,9 +312,9 @@ def tb_logger_job_validation(root_log_dir, tb_queue):
 
         command, data = tb_queue.get()
         if command == "log":
-            episode, n_validation_episodes, avg_reward_per_episode, n_success_episodes = data
+            episode, n_validation_episodes, avg_reward_per_episode, n_success_episodes, avg_episode_length = data
 
-            logger(episode, n_validation_episodes, avg_reward_per_episode, n_success_episodes)
+            logger(episode, n_validation_episodes, avg_reward_per_episode, n_success_episodes, avg_episode_length)
 
         elif command == "kill":
             print("Killing TensorBoard Logger")

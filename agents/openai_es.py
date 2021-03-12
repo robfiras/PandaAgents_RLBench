@@ -154,7 +154,7 @@ class OpenAIES(ESAgent):
 
                 # log validation to tensorboard
                 self.tb_queue_validation.put(("log", (episode, self.n_validation_episodes,
-                                                      avg_reward_per_episode, dones)))
+                                                      avg_reward_per_episode, dones, self.episode_length)))
 
             # log to tensorboard if needed
             if self.use_tensorboard:

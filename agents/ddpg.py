@@ -324,7 +324,7 @@ class DDPG(RLAgent):
                     val_start_time = time.time()
 
                     # run validation
-                    number_of_succ_episodes_validation, cumulated_reward_validation = self.run_validation_in_training()
+                    number_of_succ_episodes_validation, cumulated_reward_validation, avg_episode_length = self.run_validation_in_training()
                     val_duration = time.time() - val_start_time
                     avg_reward_per_episode = cumulated_reward_validation / (self.n_validation_episodes+self.n_workers)
                     print("Proportion of successful episodes %f and average reward per episode %f | Duration %f sec.\n" %
@@ -337,7 +337,8 @@ class DDPG(RLAgent):
 
                     # log to tensorboard
                     self.tensorboard_logger_validation(self.global_episode, self.n_validation_episodes,
-                                                       avg_reward_per_episode, number_of_succ_episodes_validation)
+                                                       avg_reward_per_episode, number_of_succ_episodes_validation,
+                                                       avg_episode_length)
 
                 obs = []
                 # init a list of worker (connections) which haven't finished their episodes yet -> all at reset
@@ -474,6 +475,7 @@ class DDPG(RLAgent):
         cumulated_reward = 0
         episode = 0
         step_in_current_episode = 0
+        successful_episode_lengths = []
         while episode < self.n_validation_episodes:
 
             # reset episode if maximal length is reached or all worker are done
@@ -499,6 +501,9 @@ class DDPG(RLAgent):
             step_in_current_episode += 1
             number_of_succ_episodes += np.sum(done)
             cumulated_reward += np.sum(reward)
+            for d in done:
+                if d > 0.0:
+                    successful_episode_lengths.append(step_in_current_episode)
             obs = next_obs
             next_obs = []
             reward = []
@@ -508,7 +513,13 @@ class DDPG(RLAgent):
         [q.put(("kill", ())) for q in command_queue_valid]
         [worker.join() for worker in workers_valid]
 
-        return number_of_succ_episodes, cumulated_reward
+        # calculate average length of episodes during validation
+        successful_episode_lengths = np.array(successful_episode_lengths)
+        n_not_successful = self.n_validation_episodes - number_of_succ_episodes
+        episode_lengths_not_successful = np.ones(n_not_successful)*self.episode_length
+        mean_episode_length = np.mean(np.concatenate([successful_episode_lengths, episode_lengths_not_successful]))
+
+        return number_of_succ_episodes, cumulated_reward, mean_episode_length
 
     def all_worker_reset(self, running_workers, obs):
         """

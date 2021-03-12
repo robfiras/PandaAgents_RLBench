@@ -38,7 +38,7 @@ class ESAgent(Agent):
                 remainder = self.perturbations_per_batch % self.validation_interval
             if remainder != 0:
                 if self.validation_interval >= self.perturbations_per_batch:
-                    new_valid_interval = self.validation_interval + (self.n_workers - remainder)
+                    new_valid_interval = self.validation_interval + (self.perturbations_per_batch - remainder)
                 else:
                     new_valid_interval = self.validation_interval + remainder
                 if new_valid_interval - self.validation_interval > 20:
