@@ -3,8 +3,8 @@ import sys
 import yaml
 
 from rlbench.action_modes import ArmActionMode, GripperActionMode, ActionMode
-from rlbench.observation_config import ObservationConfig, CameraConfig
-from rlbench.tasks import reach_target, custom_pick_and_lift
+from rlbench.observation_config import ObservationConfig, CameraConfig, RenderMode
+from rlbench import tasks
 from agents.ddpg import DDPG
 from agents.td3 import TD3
 from agents.openai_es import OpenAIES
@@ -98,7 +98,7 @@ class AgentConfig:
 
         return ActionMode(arm=arm_action_mode, gripper=gripper_action_mode)
 
-    def _get_camera_setup(self, name):
+    def __get_camera_setup(self, name):
         if self.cfg["Agent"]["Observations"][name]:
             camera = self.cfg["CameraConfig"][name]
 
@@ -106,7 +106,8 @@ class AgentConfig:
                                 depth=camera["depth"],
                                 mask=camera["mask"],
                                 masks_as_one_channel=camera["mask_as_one_channel"],
-                                image_size=(camera["image_size"][0], camera["image_size"][1]))
+                                image_size=(camera["image_size"][0], camera["image_size"][1]),
+                                render_mode=RenderMode.OPENGL)
         else:
             camera_config = CameraConfig()
             camera_config.set_all(False)    # disable rgb, depth and mask
@@ -115,10 +116,10 @@ class AgentConfig:
     def __setup_obs_config(self):
         oc = self.cfg["Agent"]["Observations"]
 
-        obs_config = ObservationConfig(left_shoulder_camera=self._get_camera_setup("left_shoulder_camera"),
-                                       right_shoulder_camera=self._get_camera_setup("right_shoulder_camera"),
-                                       wrist_camera=self._get_camera_setup("wrist_camera"),
-                                       front_camera=self._get_camera_setup("front_camera"),
+        obs_config = ObservationConfig(left_shoulder_camera=self.__get_camera_setup("left_shoulder_camera"),
+                                       right_shoulder_camera=self.__get_camera_setup("right_shoulder_camera"),
+                                       wrist_camera=self.__get_camera_setup("wrist_camera"),
+                                       front_camera=self.__get_camera_setup("front_camera"),
                                        joint_velocities=oc["joint_velocities"],
                                        joint_positions=oc["joint_positions"],
                                        joint_forces=oc["joint_forces"],
@@ -133,19 +134,26 @@ class AgentConfig:
     def __setup_task_class(self):
         task_class = self.cfg["Agent"]["Task"]
         if task_class == "ReachTarget":
-            return reach_target.ReachTarget
+            return tasks.ReachTarget
+        elif task_class == "ReachTargetWithObstacles":
+            return tasks.ReachTargetWithObstacles
         elif task_class == "PickAndLift":
-            return custom_pick_and_lift.CustomPickAndLift
+            return tasks.CustomPickAndLiftNoRotation
         else:
             raise ValueError("Until now only ReachTarget Task supported. More coming soon.")
 
     def get_agent(self):
         agent_type = self.cfg["Agent"]["Type"]
+        mode = self.cfg["Agent"]["Setup"]["mode"]
         if agent_type == "DDPG":
             return DDPG(self.action_mode, self.obs_config, self.task_class, self.cfg)
         elif agent_type == "TD3":
             return TD3(self.action_mode, self.obs_config, self.task_class, self.cfg)
         elif agent_type == "OpenAIES":
-            return OpenAIES(self.action_mode, self.obs_config, self.task_class, self.cfg)
+            # We use DDPG's validation methods as it is faster
+            if mode == "validation_mult":
+                return DDPG(self.action_mode, self.obs_config, self.task_class, self.cfg)
+            else:
+                return OpenAIES(self.action_mode, self.obs_config, self.task_class, self.cfg)
         else:
             raise ValueError("%s is not a supported agent type. Please check your config-file." % agent_type)

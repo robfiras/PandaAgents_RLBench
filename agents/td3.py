@@ -85,7 +85,7 @@ class TD3(DDPG):
 
         # --- copy weights to targets or load old model weights ---
         if type(self) == TD3:
-            self.init_or_load_weights()
+            self.init_or_load_weights(load_critic=(self.mode != "validation" and self.mode != "validation_mult"))
 
     @tf.function
     def _compute_td_error(self, states, actions, rewards, next_states, dones):

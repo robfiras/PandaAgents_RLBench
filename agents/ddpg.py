@@ -276,7 +276,7 @@ class DDPG(RLAgent):
 
         # --- copy weights to targets or load old model weights ---
         if type(self) == DDPG:
-            self.init_or_load_weights()
+            self.init_or_load_weights(load_critic=(self.mode != "validation" and self.mode != "validation_mult"))
 
     def run(self):
         if self.mode == "online_training":
@@ -291,6 +291,8 @@ class DDPG(RLAgent):
                     print("Terminating ...")
                     sys.exit()
             self.run_validation(self.actor)
+        elif self.mode == "validation_mult":
+            self.run_validation_post()
         else:
             raise ValueError("%\ns mode is not supported in DDPG!\n")
 
@@ -433,6 +435,58 @@ class DDPG(RLAgent):
         self.clean_up()
         print('\nDone.\n')
 
+    def run_validation_post(self):
+
+        # check if path to weight validation directory exists
+        path_to_validation_weights = os.path.join(self.root_log_dir, "weights_validation")
+        if not os.path.exists(path_to_validation_weights):
+            print("weights_validation path (%s) not found!" % path_to_validation_weights)
+            sys.exit()
+
+        # setup tensorboard
+        summary_writer = tf.summary.create_file_writer(logdir=os.path.join(self.root_log_dir, "tb_valid_post"))
+
+        # get a list of all weight names
+        weights_validation_names = os.listdir(path_to_validation_weights)
+
+        # extract the episode id
+        weights_validation_names = [int(name.split(sep="_")[-1]) for name in weights_validation_names]
+
+        # iterate over all weights in weights_validation
+        for weight_id in sorted(weights_validation_names):
+
+            # load weights in actor model
+            if self.cfg["Agent"]["Type"] == "OpenAIES":
+                self.actor.load_weights(os.path.join(path_to_validation_weights, "episode_%d" % weight_id,
+                                                     "variables", "variables"))
+            else:
+                self.actor.load_weights(os.path.join(path_to_validation_weights, "episode_%d" % weight_id,
+                                                     "actor", "variables", "variables"))
+
+            # run validation
+            print("Validating weights of episode %d on %d episodes ..." % (weight_id, self.n_validation_episodes))
+            val_start_time = time.time()
+
+            # run validation
+            number_of_succ_episodes_validation, cumulated_reward_validation, avg_episode_length = self.run_validation_in_training()
+            val_duration = time.time() - val_start_time
+            avg_reward_per_episode = cumulated_reward_validation / (self.n_validation_episodes + self.n_workers)
+            print("Proportion of successful episodes %f and average reward per episode %f | Duration %f sec.\n" %
+                  (number_of_succ_episodes_validation / self.n_validation_episodes,
+                   avg_reward_per_episode, val_duration))
+
+            with summary_writer.as_default():
+                tf.summary.scalar('Post Validation | Average Reward per Episode', avg_reward_per_episode,
+                                  step=weight_id)
+
+                tf.summary.scalar('Post Validation | Proportion of successful Episodes',
+                                  number_of_succ_episodes_validation/self.n_validation_episodes,
+                                  step=weight_id)
+
+                tf.summary.scalar('Post Validation | Average Episode Length',
+                                  avg_episode_length,
+                                  step=weight_id)
+
     def run_validation_in_training(self):
         """
         Runs validation during training. Config file specifies validation parameters.
@@ -523,7 +577,7 @@ class DDPG(RLAgent):
 
     def all_worker_reset(self, running_workers, obs):
         """
-        Resets the episodes of all all workers
+        Resets the episodes of all workers
         :param running_workers: list of running worker connections
         :param obs: list of observations to be filled with initial observations
         """
@@ -616,7 +670,7 @@ class DDPG(RLAgent):
             self.actor.save(non_default_path + "actor")
             self.critic.save(non_default_path + "critic")
 
-    def init_or_load_weights(self):
+    def init_or_load_weights(self, load_critic=True):
         # --- actor
         # check if we need to load weights
         if self.path_to_model:
@@ -628,15 +682,16 @@ class DDPG(RLAgent):
             # update_target_variables(self.target_actor.weights, self.actor.weights, tau=1.0)
             self.target_actor.set_weights(self.actor.get_weights())
         # --- critic
-        # check if we need to load weights
-        if self.path_to_model:
-            print("Loading weights from %s to critic..." % self.path_to_model)
-            self.critic.load_weights(os.path.join(self.path_to_model, "weights", "critic", "variables", "variables"))
-            self.target_critic.load_weights(os.path.join(self.path_to_model, "weights", "critic", "variables", "variables"))
-        else:
-            # copy the weights to the target critic
-            # update_target_variables(self.target_critic.weights, self.critic.weights, tau=1.0)
-            self.target_critic.set_weights(self.critic.get_weights())
+        if load_critic:
+            # check if we need to load weights
+            if self.path_to_model:
+                print("Loading weights from %s to critic..." % self.path_to_model)
+                self.critic.load_weights(os.path.join(self.path_to_model, "weights", "critic", "variables", "variables"))
+                self.target_critic.load_weights(os.path.join(self.path_to_model, "weights", "critic", "variables", "variables"))
+            else:
+                # copy the weights to the target critic
+                # update_target_variables(self.target_critic.weights, self.critic.weights, tau=1.0)
+                self.target_critic.set_weights(self.critic.get_weights())
 
     @tf.function
     def _compute_td_error(self, states, actions, rewards, next_states, dones):
