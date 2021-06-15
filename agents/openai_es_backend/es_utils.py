@@ -262,10 +262,8 @@ def run_n_episodes(n_episodes, model, task, episode_length, obs_scaling_vector,
                 action = model.predict(tf.constant([obs.get_low_dim_data() / obs_scaling_vector]))
             action = np.squeeze(action)
             if redundancy_resolution_setup is not None:
-                ref_pos = redundancy_resolution_setup["ref_position"]
-                alpha = redundancy_resolution_setup["alpha"]
-                action[0:7] = task.resolve_redundancy_joint_velocities(actions=action[0:7], reference_position=ref_pos,
-                                                                       alpha=alpha)
+                action[0:7] = task.resolve_redundancy_joint_velocities(actions=action[0:7],
+                                                                       setup=redundancy_resolution_setup)
             # check if we need to use a gripper actions
             if keep_gripper_open:
                 action[7] = 1

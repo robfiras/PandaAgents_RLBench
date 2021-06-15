@@ -44,7 +44,8 @@ Agent:
       n_validation_episodes: 1000 # number of episodes for validation
     use_redundancy_resolution: no
     redundancy_resolution_setup:
-      ref_position:
+      mode: reference_position # reference_position or  collision_avoidance (the latter only works with tasks with obstacles!)
+      ref_position: # only used with reference_position mode
         - 0.0
         - -0.82
         - 0.0
@@ -52,7 +53,9 @@ Agent:
         - 0.0
         - 1.75
         - 0.75
-      alpha: 1.0
+      alpha: 1.0 # step-size for redundancy resolution
+      W: null # weighting vector for error. Either 7-dim list or null (then default vectors are used)
+      cut-off_error: 0.001  # error cut-off threshold for redundancy resolution, if null then no cut-off
   Task: PickAndLift # until now only ReachTarget or PickAndLift (more coming soon)
 
 # config for all RL agents

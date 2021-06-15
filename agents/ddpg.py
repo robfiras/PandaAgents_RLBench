@@ -15,6 +15,7 @@ from agents.misc.tensorboard_logger import TensorBoardLogger, TensorBoardLoggerV
 from agents.base_rl import RLAgent, job_worker_validation
 import agents.misc.utils as utils
 
+from agents.base_es import Network as ES_Network
 # tf.config.run_functions_eagerly(True)
 tf.keras.backend.set_floatx('float64')
 
@@ -292,6 +293,11 @@ class DDPG(RLAgent):
                     sys.exit()
             self.run_validation(self.actor)
         elif self.mode == "validation_mult":
+            # if an OpenAI-ES agent is evaluated here, use its network instead
+            if self.cfg["Agent"]["Type"] == "OpenAIES":
+                self.actor = ES_Network(self.cfg["ESAgent"]["Hyperparameters"]["layers_network"],
+                                       self.dim_actions, self.max_actions)
+                self.actor.build((1, self.dim_observations))
             self.run_validation_post()
         else:
             raise ValueError("%\ns mode is not supported in DDPG!\n")
@@ -508,6 +514,7 @@ class DDPG(RLAgent):
                                           command_queue_valid[worker_id],
                                           result_queue_valid[worker_id],
                                           self.obs_scaling_vector,
+                                          self.redundancy_resolution_setup,
                                           seed)) for worker_id in range(self.n_workers)]
         for worker in workers_valid:
             worker.start()

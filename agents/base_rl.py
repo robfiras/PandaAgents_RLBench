@@ -102,10 +102,8 @@ def job_worker(worker_id, action_mode,
             actions = command_args[0]
             # check if we need to resolve redundancy
             if redundancy_resolution_setup is not None:
-                ref_pos = redundancy_resolution_setup["ref_position"]
-                alpha = redundancy_resolution_setup["alpha"]
                 actions[0:7] = task.resolve_redundancy_joint_velocities(actions=actions[0:7],
-                                                                        reference_position=ref_pos, alpha=alpha)
+                                                                        setup=redundancy_resolution_setup)
             next_observation, reward, done = task.step(actions)
             if save_camera_input:
                 camcorder.save(next_observation, task.get_robot_visuals(), task.get_all_graspable_objects())
@@ -124,7 +122,9 @@ def job_worker_validation(worker_id, action_mode,
                           obs_config, task_class,
                           command_q: mp.Queue,
                           result_q: mp.Queue,
-                          obs_scaling, seed):
+                          obs_scaling,
+                          redundancy_resolution_setup,
+                          seed):
 
     np.random.seed(worker_id+seed)
     # setup the environment
@@ -146,6 +146,10 @@ def job_worker_validation(worker_id, action_mode,
             result_q.put((descriptions, observation))
         elif command_type == "step":
             actions = command_args[0]
+            # check if we need to resolve redundancy
+            if redundancy_resolution_setup is not None:
+                actions[0:7] = task.resolve_redundancy_joint_velocities(actions=actions[0:7],
+                                                                        setup=redundancy_resolution_setup)
             next_observation, reward, done = task.step(actions)
             if obs_scaling is not None:
                 next_observation = next_observation.get_low_dim_data() / obs_scaling
