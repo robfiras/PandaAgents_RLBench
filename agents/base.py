@@ -8,6 +8,7 @@ import tensorflow as tf
 
 from agents.misc.logger import CmdLineLogger
 from agents.misc.success_evaluator import SuccessEvaluator
+from agents.misc.camcorder import Camcorder
 import rlbench
 from rlbench.observation_config import ObservationConfig
 from rlbench.action_modes import ActionMode
@@ -24,10 +25,9 @@ class Agent(object):
 
         # setup some general parameters
         setup = self.cfg["Agent"]["Setup"]
-        valid_modes = ["online_training", "offline_training", "validation"]
-        if setup["mode"] in valid_modes:
-            self.mode = setup["mode"]
-        else:
+        valid_modes = ["online_training", "offline_training", "validation", "validation_mult"]
+        self.mode = setup["mode"]
+        if self.mode not in valid_modes:
             raise ValueError("Mode %s not supported." % self.mode)
         self.root_log_dir = setup["root_log_dir"]
         self.use_tensorboard = setup["use_tensorboard"]
@@ -144,11 +144,11 @@ class Agent(object):
 
         # redundancy resolution setup
         self.use_redundancy_resolution = setup["use_redundancy_resolution"]
-        if self.use_redundancy_resolution:
-            self.redundancy_resolution_setup = setup["redundancy_resolution_setup"]
-            self.redundancy_resolution_setup["ref_position"] = np.array(self.redundancy_resolution_setup["ref_position"])
-        else:
-            self.redundancy_resolution_setup = None
+        self.redundancy_resolution_setup = setup["redundancy_resolution_setup"]
+        self.redundancy_resolution_setup["ref_position"] = np.array(self.redundancy_resolution_setup["ref_position"])
+        self.redundancy_resolution_setup["lower_joint_pos_limit"] = self.lower_joint_pos_limits_rad
+        self.redundancy_resolution_setup["upper_joint_pos_limit"] = self.upper_joint_pos_limits_rad
+        self.redundancy_resolution_setup["use_redundancy_resolution"] = self.use_redundancy_resolution
 
             # concatenate to scaling vector
         if self.scale_robot_observations:
@@ -170,7 +170,7 @@ class Agent(object):
                                                  headless=self.headless, randomize_every=self.randomize_every,
                                                  visual_randomization_config=self.visual_rand_config)
         else:
-            env = Environment(action_mode=self.action_mode, obs_config=self.obs_config, headless=False)
+            env = Environment(action_mode=self.action_mode, obs_config=self.obs_config, headless=self.headless)
         env.launch()
         task = env.get_task(self.task_class)
         task.reset()
@@ -179,36 +179,54 @@ class Agent(object):
         episode = 0
         step = 0
         done = False
-        E = np.zeros(7)
         logger = CmdLineLogger(self.logging_interval, self.training_episodes, 1)
         evaluator = SuccessEvaluator()
-        max_action = 0
+
+        # containers for validation
+        reward_per_episode = 0
+        dones = 0
+        rewards = 0
+        episode_lengths = 0
+
+        # we can save all enables camera inputs to root log dir if we want
+        if self.save_camera_input:
+            camcorder = Camcorder(self.root_log_dir, 0)
         while episode < self.training_episodes:
             # reset episode if maximal length is reached or all worker are done
-            if step % self.episode_length == 0:
+            if step % self.episode_length == 0 or done:
+
                 descriptions, observation = task.reset()
+
+                if self.save_camera_input:
+                    camcorder.save(observation, task.get_robot_visuals(), task.get_all_graspable_objects())
                 if self.obs_scaling_vector is not None:
                     observation = observation.get_low_dim_data() / self.obs_scaling_vector
                 else:
                     observation = observation.get_low_dim_data()
                 logger(episode, evaluator.successful_episodes, evaluator.successful_episodes_perc)
+
+                if step != 0:
+                    rewards += reward_per_episode
+                    episode_lengths += step
+
                 step = 0
+                reward_per_episode = 0
                 episode += 1
 
             # predict action
             actions = np.squeeze(model.predict(tf.constant([observation])))
+            actions[0:7] = actions[0:7]
             # check if we need to resolve redundancy
             if self.use_redundancy_resolution:
-                ref_pos = self.redundancy_resolution_setup["ref_position"]
-                alpha = self.redundancy_resolution_setup["alpha"]
-                actions[0:7] = task.resolve_redundancy_joint_velocities(actions[0:7], ref_pos, alpha)
+                actions[0:7], _ = task.resolve_redundancy_joint_velocities(actions=actions[0:7],
+                                                                           setup=self.redundancy_resolution_setup)
 
             # check if we need to use a gripper actions
             if self.keep_gripper_open:
                 actions[7] = 1
 
             # increment simulation
-            next_observation, reward, done = task.step(actions)
+            next_observation, reward, done = task.step(actions, camcorder if self.save_camera_input else None)
             if self.obs_scaling_vector is not None:
                 next_observation = next_observation.get_low_dim_data() / self.obs_scaling_vector
             else:
@@ -216,11 +234,53 @@ class Agent(object):
             evaluator.add(episode, done)
             observation = next_observation
             step += 1
+            reward_per_episode += reward
+            dones += done
 
-
-        #print("Mean Error: ", np.mean(E))
         env.shutdown()
         print("\nDone.\n")
+        return rewards/self.episode_length, dones/self.training_episodes, episode_lengths/self.training_episodes
+
+    def run_validation_post_sequential(self, model):
+
+        path_to_validation_weights = os.path.join(self.root_log_dir, "weights_validation")
+
+        if not os.path.exists(path_to_validation_weights):
+            print("weights_validation path (%s) not found!" % path_to_validation_weights)
+            sys.exit()
+
+        # this should always run in headless mode
+        self.headless = True
+
+        # setup tensorboard
+        summary_writer = tf.summary.create_file_writer(logdir=os.path.join(self.root_log_dir, "tb_valid_post"))
+
+        # iterate over all weights in weights_validation
+        for weights_dir in os.listdir(path_to_validation_weights):
+
+            # get the weight id (training episode)
+            weight_id = int(weights_dir.split(sep="_")[-1])
+
+            # load weights in actor model
+            model.load_weights(os.path.join(path_to_validation_weights, weights_dir, "actor", "variables", "variables"))
+
+            # run validation of model
+            print("Validation weight of training episode %d ..." % weight_id)
+            avg_reward_per_episode, success_prop, avg_succes_episode_length = self.run_validation(model)
+            print("Average reward: %f  | Proportion of successful episodes: %f | Average success episode length. %f" %
+                  (avg_reward_per_episode, success_prop, avg_succes_episode_length))
+
+            with summary_writer.as_default():
+                tf.summary.scalar('Post Validation | Average Reward per Episode', avg_reward_per_episode,
+                                  step=weight_id)
+
+                tf.summary.scalar('Post Validation | Proportion of successful Episodes',
+                                  success_prop,
+                                  step=weight_id)
+
+                tf.summary.scalar('Post Validation | Average Episode Length',
+                                  avg_succes_episode_length,
+                                  step=weight_id)
 
     @property
     def only_low_dim_obs(self) -> bool:

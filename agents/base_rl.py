@@ -101,9 +101,15 @@ def job_worker(worker_id, action_mode,
         elif command_type == "step":
             actions = command_args[0]
             # check if we need to resolve redundancy
-            if redundancy_resolution_setup is not None:
-                actions[0:7] = task.resolve_redundancy_joint_velocities(actions=actions[0:7],
-                                                                        setup=redundancy_resolution_setup)
+            # check if we need to resolve redundancy
+            if redundancy_resolution_setup["use_redundancy_resolution"]:
+                actions[0:7], L = task.resolve_redundancy_joint_velocities(actions=actions[0:7],
+                                                                           setup=redundancy_resolution_setup)
+            else:
+                # here we only care about the loss (for logging)
+                _, L = task.resolve_redundancy_joint_velocities(actions=actions[0:7],
+                                                                setup=redundancy_resolution_setup)
+
             next_observation, reward, done = task.step(actions)
             if save_camera_input:
                 camcorder.save(next_observation, task.get_robot_visuals(), task.get_all_graspable_objects())
@@ -111,7 +117,7 @@ def job_worker(worker_id, action_mode,
                 next_observation = next_observation.get_low_dim_data() / obs_scaling
             else:
                 next_observation = next_observation.get_low_dim_data()
-            result_q.put((next_observation, reward, done))
+            result_q.put((next_observation, reward, done, L))
         elif command_type == "kill":
             print("Killing worker %d" % worker_id)
             env.shutdown()
@@ -147,15 +153,20 @@ def job_worker_validation(worker_id, action_mode,
         elif command_type == "step":
             actions = command_args[0]
             # check if we need to resolve redundancy
-            if redundancy_resolution_setup is not None:
-                actions[0:7] = task.resolve_redundancy_joint_velocities(actions=actions[0:7],
-                                                                        setup=redundancy_resolution_setup)
+            if redundancy_resolution_setup["use_redundancy_resolution"]:
+                actions[0:7], L = task.resolve_redundancy_joint_velocities(actions=actions[0:7],
+                                                                           setup=redundancy_resolution_setup)
+            else:
+                # here we only care about the loss (for logging)
+                _, L = task.resolve_redundancy_joint_velocities(actions=actions[0:7],
+                                                                setup=redundancy_resolution_setup)
+
             next_observation, reward, done = task.step(actions)
             if obs_scaling is not None:
                 next_observation = next_observation.get_low_dim_data() / obs_scaling
             else:
                 next_observation = next_observation.get_low_dim_data()
-            result_q.put((next_observation, reward, done))
+            result_q.put((next_observation, reward, done, L))
         elif command_type == "kill":
             print("Killing worker %d" % worker_id)
             env.shutdown()

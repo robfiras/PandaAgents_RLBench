@@ -308,6 +308,7 @@ class DDPG(RLAgent):
         reward = []
         next_obs = []
         done = []
+        red_loss = []
         running_workers = []
         number_of_succ_episodes = 0
         percentage_succ = 0.0
@@ -332,7 +333,7 @@ class DDPG(RLAgent):
                     val_start_time = time.time()
 
                     # run validation
-                    number_of_succ_episodes_validation, cumulated_reward_validation, avg_episode_length = self.run_validation_in_training()
+                    number_of_succ_episodes_validation, cumulated_reward_validation, avg_episode_length, avg_red_loss = self.run_validation_in_training()
                     val_duration = time.time() - val_start_time
                     avg_reward_per_episode = cumulated_reward_validation / (self.n_validation_episodes+self.n_workers)
                     print("Proportion of successful episodes %f and average reward per episode %f | Duration %f sec.\n" %
@@ -346,7 +347,7 @@ class DDPG(RLAgent):
                     # log to tensorboard
                     self.tensorboard_logger_validation(self.global_episode, self.n_validation_episodes,
                                                        avg_reward_per_episode, number_of_succ_episodes_validation,
-                                                       avg_episode_length)
+                                                       avg_red_loss, avg_episode_length)
 
                 obs = []
                 # init a list of worker (connections) which haven't finished their episodes yet -> all at reset
@@ -371,7 +372,7 @@ class DDPG(RLAgent):
 
             # make a step in workers
             self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
-                                 done=done, running_workers=running_workers)
+                                 done=done, red_loss=red_loss, running_workers=running_workers)
 
             training_cond = total_steps >= self.start_training and self.global_step_main % self.training_interval == 0
             if training_cond:
@@ -397,6 +398,7 @@ class DDPG(RLAgent):
                                                                                    losses={"Critic-Loss": avg_crit_loss if training_cond else None,
                                                                                            "Actor-Loss": avg_act_loss if training_cond else None},
                                                                                    dones=done,
+                                                                                   red_loss=red_loss,
                                                                                    step_in_episode=step_in_episode,
                                                                                    rewards=reward,
                                                                                    epsilon=self.epsilon)
@@ -408,6 +410,7 @@ class DDPG(RLAgent):
             next_obs = []
             reward = []
             done = []
+            red_loss = []
 
         self.clean_up()
         print('\nDone.\n')
@@ -474,7 +477,7 @@ class DDPG(RLAgent):
             val_start_time = time.time()
 
             # run validation
-            number_of_succ_episodes_validation, cumulated_reward_validation, avg_episode_length = self.run_validation_in_training()
+            number_of_succ_episodes_validation, cumulated_reward_validation, avg_episode_length, mean_red_loss = self.run_validation_in_training()
             val_duration = time.time() - val_start_time
             avg_reward_per_episode = cumulated_reward_validation / (self.n_validation_episodes + self.n_workers)
             print("Proportion of successful episodes %f and average reward per episode %f | Duration %f sec.\n" %
@@ -491,6 +494,10 @@ class DDPG(RLAgent):
 
                 tf.summary.scalar('Post Validation | Average Episode Length',
                                   avg_episode_length,
+                                  step=weight_id)
+
+                tf.summary.scalar('Post Validation | Average Loss Redundancy Resolution',
+                                  mean_red_loss,
                                   step=weight_id)
 
     def run_validation_in_training(self):
@@ -531,6 +538,8 @@ class DDPG(RLAgent):
         reward = []
         next_obs = []
         done = []
+        red_loss = []
+        all_red_losses = []
         running_validation_workers = []
         number_of_succ_episodes = 0
         cumulated_reward = 0
@@ -556,7 +565,7 @@ class DDPG(RLAgent):
 
             # make a step in validation workers
             self.all_worker_step(obs=obs, reward=reward, action=action, next_obs=next_obs,
-                                 done=done, running_workers=running_validation_workers, add_data_to_buffer=False)
+                                 done=done, red_loss=red_loss, running_workers=running_validation_workers, add_data_to_buffer=False)
 
             # increment and save next_obs as obs
             step_in_current_episode += 1
@@ -565,10 +574,12 @@ class DDPG(RLAgent):
             for d in done:
                 if d > 0.0:
                     successful_episode_lengths.append(step_in_current_episode)
+            all_red_losses.append(red_loss)
             obs = next_obs
             next_obs = []
             reward = []
             done = []
+            red_loss = []
 
         # kill validation workers
         [q.put(("kill", ())) for q in command_queue_valid]
@@ -576,11 +587,12 @@ class DDPG(RLAgent):
 
         # calculate average length of episodes during validation
         successful_episode_lengths = np.array(successful_episode_lengths)
-        n_not_successful = self.n_validation_episodes - number_of_succ_episodes
+        n_not_successful = np.maximum(self.n_validation_episodes - number_of_succ_episodes, 0)
         episode_lengths_not_successful = np.ones(n_not_successful)*self.episode_length
         mean_episode_length = np.mean(np.concatenate([successful_episode_lengths, episode_lengths_not_successful]))
+        mean_red_loss = np.mean(np.concatenate(all_red_losses))
 
-        return number_of_succ_episodes, cumulated_reward, mean_episode_length
+        return number_of_succ_episodes, cumulated_reward, mean_episode_length, mean_red_loss
 
     def all_worker_reset(self, running_workers, obs):
         """
@@ -596,7 +608,7 @@ class DDPG(RLAgent):
             descriptions, single_obs = w["result_queue"].get()
             obs.append(single_obs)
 
-    def all_worker_step(self, obs, action, reward, next_obs, done, running_workers, add_data_to_buffer=True):
+    def all_worker_step(self, obs, action, reward, next_obs, done, red_loss, running_workers, add_data_to_buffer=True):
         """
         Increments the simulation in all running workers, receives the new data and adds it to the replay buffer.
         :param obs: list of observations to be filled
@@ -604,6 +616,7 @@ class DDPG(RLAgent):
         :param reward: list of rewards to be filled
         :param next_obs: list of next observations to be filled
         :param done: list of dones to be filled
+        :param red_loss: list of losses from redundancy resolution
         :param running_workers: list of running worker connections
         :param add_data_to_buffer: if true, adds the data to the buffer
         """
@@ -613,7 +626,7 @@ class DDPG(RLAgent):
         # collect results from workers
         finished_workers = []
         for w, o, a, e in zip(running_workers, obs, action, range(self.n_workers)):
-            single_next_obs, single_reward, single_done = w["result_queue"].get()
+            single_next_obs, single_reward, single_done, single_L = w["result_queue"].get()
             if add_data_to_buffer:
                 self.replay_buffer.append(o, a, float(single_reward), single_next_obs,
                                           float(single_done) if self.save_dones_in_buffer else float(0),
@@ -621,6 +634,7 @@ class DDPG(RLAgent):
             next_obs.append(single_next_obs)
             reward.append(single_reward)
             done.append(single_done)
+            red_loss.append(single_L)
             if single_done:
                 # remove worker from running_workers if finished
                 finished_workers.append(w)

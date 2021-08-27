@@ -20,7 +20,7 @@ Agent:
     record_gripper_closing: no
     task_low_dim_state: yes
   Setup:
-    mode: online_training # either "online_training", "offline_training" or "validation"
+    mode: online_training # either "online_training", "offline_training", "validation" or "validation_mult"
     root_log_dir: null  # main logging directory, where models, tensorboard logs and buffers are saved
     run_id: null  # if not set, default run_id with time stamp is created
     load_model_run_id: null # run_id of the model in root_log_dir, whose parameters should be read
